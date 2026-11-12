@@ -211,8 +211,9 @@ export const turnDecisionSupersededInformationKind = defineInformationKind({
 
 export const turnDecisionInterruptedInformationKind = defineInformationKind({
   kind: "agent.router.turn.decision.interrupted",
-  displayName: "规划被新消息打断",
-  description: "新输入在规划结果提交前赢得决策锁，旧规划结果不得再分派。",
+  displayName: "规划被持久干预打断",
+  description:
+    "已持久确认的干预在规划结果提交前赢得决策锁，旧规划结果不得再分派。",
   payloadSchema: z
     .object({
       candidateInformationId: nonBlankString,
@@ -236,7 +237,10 @@ export const turnDecisionInterruptedInformationKind = defineInformationKind({
     "core:uses-context": {
       required: true,
       multiple: false,
-      targetKinds: [inboundTextInformationKind.kind],
+      targetKinds: [
+        inboundTextInformationKind.kind,
+        "core.action.run.invalidated.v1",
+      ],
     },
   },
   log: {

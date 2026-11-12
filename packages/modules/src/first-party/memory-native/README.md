@@ -29,3 +29,19 @@
 没有关键词时，适用人物摘要仍作为 level 0 固定注入。群聊属性、自我认识和表达习惯共用固定条目。具体经历通过文本、图和可选向量召回。成功投递仅证明消息已经发出，不证明消息内承诺的行动已经完成。
 
 完整契约见 `docs/developers/memory.md`。
+
+## 经历操作契约
+
+新请求在 `memory.native.formation.requested.v1` 中持久保存 `formationPolicy: "experience-operations.v1"`。旧请求没有该字段，继续使用其冻结时的输出 schema。来源按 registration position 收集，因此发生时间较早但迟到的更正也能进入后续批次。批次大小不决定经历边界。
+
+形成器用已有节点 ID 作为 `key` 增补同一经历。新节点使用批次 ID 与 key 派生稳定 ID。输出可附带一次 `experienceOperation`：
+
+| 操作                    | inputIds          | outputIds        | 节点要求                                                        |
+| ----------------------- | ----------------- | ---------------- | --------------------------------------------------------------- |
+| correct / seal / reopen | 一个已有 ID       | 同一个已有 ID    | 发布下一 revision；seal 为 sealed，reopen 为 open               |
+| merge                   | 两个或更多已有 ID | 一个新 key       | 输入归档，输出 active，来源覆盖所有输入的证据                   |
+| split                   | 一个已有 ID       | 两个或更多新 key | 输入归档，输出 active，各输出明确分配来源，合计覆盖全部输入证据 |
+
+服务端从冻结快照生成 expectedVersions，从存储证明派生来源归属和 predecessors。自动合并／拆分也必须经过当前有效性、人工锁、来源失效和预期版本检查。归档输入不能再次分叉，已有节点不能被冒充为新输出。原始提案以 batchId 作为 operationId 发布；重复执行返回同一结果，冲突触发持久后继批次重新冻结。
+
+空结果和无变化只确认读取范围。失败保留已发布版本及待处理来源。查询通过 `NativeMemoryAccess.freeze/recall/prepare` 携带作用域、所有者、时间与 publication cutoff；历史分页、原生工具的读写授权由 database/runtime 的现有端口负责。形成器不另建记忆存储或前台 writer。

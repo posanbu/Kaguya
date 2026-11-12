@@ -1,4 +1,5 @@
 /**
+ * parseCordisTreeText 为离线检视公开无文件权限副作用的 YAML 解析入口。
  * writeModuleInstanceConfig 导出固定身份的现有实例原子替换接口。
  * 功能概述：本入口聚合 `packages/config` 的稳定公开 API，向服务启动链、
  * WebUI/API 与测试导出错误类型、就绪态工具、Profile Registry manager
@@ -101,3 +102,5 @@ export type {
   RuntimeConfigInput,
 } from "./model.js";
 export { migrateLifecycleConfig } from "./lifecycle-migration.js";
+
+export { parseCordisTreeText } from "./cordis-tree.js";

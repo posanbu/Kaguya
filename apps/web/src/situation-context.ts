@@ -1,3 +1,8 @@
+/**
+ * 功能概述：从已保存请求提取情境摘要，不重编译模板或推测旧字段。
+ * situationRequestContext 保留旧 Prompt 摘要，并读取原 nativeStep.runInformationId 作为正式领域检视入口；
+ * situationAge 仅格式化已记录时长。SituationPage/Context 使用这些值，缺失标识保持未记录。
+ */
 import {
   compiledPromptSchema,
   nativeMemorySnapshotSchema,
@@ -5,6 +10,7 @@ import {
 } from "@kaguya/schema";
 
 export interface SituationRequestContext {
+  nativeRunInformationId?: string;
   memory?: NativeMemorySnapshot | null;
   memoryError?: string;
   recallRaw?: string | null;
@@ -94,6 +100,13 @@ export function situationRequestContext(
     json(values.get("native_memory")),
   );
   return {
+    ...(typeof object(request.nativeStep).runInformationId === "string"
+      ? {
+          nativeRunInformationId: String(
+            object(request.nativeStep).runInformationId,
+          ),
+        }
+      : {}),
     memory: memory.success ? memory.data : null,
     recallRaw: values.get("memory_recall") ?? null,
     ...(values.has("native_memory") && !memory.success

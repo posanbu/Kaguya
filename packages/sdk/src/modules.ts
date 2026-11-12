@@ -193,6 +193,8 @@ export type InformationModuleLifecycleContext = InformationModuleCreateContext;
 export interface ModuleRegistrationInput<P> {
   readonly payload: P;
   readonly references?: readonly InformationReference[];
+  /** 透明处理器只能把当前输入的直接 cause 继续作为下游 cause。 */
+  readonly causedByInformationId?: InformationId;
   /** registerOnce 的同 scope 开放槽；仅 terminalGroup 的终态释放该槽，操作重放仍复用原赢家。 */
   readonly openScope?: { readonly key: string; readonly terminalGroup: string };
   readonly contextInformationId?: InformationId;

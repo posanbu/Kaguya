@@ -311,6 +311,14 @@ export class InformationCore implements OneShotScheduleCorePort {
     return this.store.reliable.health();
   }
 
+  /** 宿主行动仓储继承当前 durable handler 的 fencing，不允许模块伪造 claim。 */
+  get executionClaim(): InformationClaim | undefined {
+    const execution = this.#execution.getStore();
+    return execution
+      ? { ...execution.claim, signal: execution.signal }
+      : undefined;
+  }
+
   get executionSignal(): AbortSignal | undefined {
     return this.#execution.getStore()?.signal;
   }

@@ -1,4 +1,5 @@
 /**
+ * 验证显式 GUI 模型路由及同 provider/model id 的并发对象隔离，使用合成模型，无外部请求。
  * Web 入站 DAG 同样产生当前会话背景投影，保持 Composition 与 Runtime 的事实集合断言同步。
  * 测试配置分别声明 inboundAllowlist/outboundAllowlist，保持与严格 Profile 或 Runtime 出站策略契约一致。
  * 默认 DAG 验证 eligible turn 先调用 Light，再由 Heavy 生成消息。
@@ -346,6 +347,7 @@ describe("unified server composition", () => {
         "core.model.task.requested",
         "core.model.task.completed",
         "core.message.assistant.text",
+        "core.message.assistant.authorized",
         "core.delivery.requested",
         "core.delivery.delivered",
         "core.delivery.started",
@@ -1164,12 +1166,24 @@ describe("unified server composition", () => {
       modelId: "default-light",
       model: { modelId: "default-light" },
       generationOptions: { structuredOutputMode: "json" },
+      configuration: {
+        adapter: "@ai-sdk/openai-compatible",
+        protocol: "chat-completions",
+        endpoint: "https://llm.example/v1",
+        revision: "1",
+      },
     });
     expect(resolver({ modelTier: "heavy" })).toEqual({
       providerId: "provider-1",
       modelId: "default-heavy",
       model: { modelId: "default-heavy" },
       generationOptions: { structuredOutputMode: "json" },
+      configuration: {
+        adapter: "@ai-sdk/openai-compatible",
+        protocol: "chat-completions",
+        endpoint: "https://llm.example/v1",
+        revision: "1",
+      },
     });
     expect(chatModel).toHaveBeenCalledWith("default-light");
     expect(chatModel).toHaveBeenCalledWith("default-heavy");
@@ -1211,12 +1225,24 @@ describe("unified server composition", () => {
       modelId: "selected-light",
       model: { modelId: "selected-light" },
       generationOptions: { structuredOutputMode: "json" },
+      configuration: {
+        adapter: "@ai-sdk/openai-compatible",
+        protocol: "chat-completions",
+        endpoint: "https://llm.example/v1",
+        revision: "1",
+      },
     });
     expect(resolver({ modelTier: "heavy" })).toEqual({
       providerId: "provider-1",
       modelId: "selected-heavy",
       model: { modelId: "selected-heavy" },
       generationOptions: { structuredOutputMode: "json" },
+      configuration: {
+        adapter: "@ai-sdk/openai-compatible",
+        protocol: "chat-completions",
+        endpoint: "https://llm.example/v1",
+        revision: "1",
+      },
     });
     expect(chatModel).toHaveBeenCalledWith("selected-light");
     expect(chatModel).toHaveBeenCalledWith("selected-heavy");
@@ -1349,6 +1375,12 @@ describe("unified server composition", () => {
     expect(resolver({ modelTier: "heavy" })).toMatchObject({
       providerId: "provider-2",
       generationOptions: { structuredOutputMode: "json" },
+      configuration: {
+        adapter: "@ai-sdk/openai-compatible",
+        protocol: "chat-completions",
+        endpoint: "https://llm.example/v1",
+        revision: "1",
+      },
     });
   });
 
@@ -1400,6 +1432,12 @@ describe("unified server composition", () => {
       modelId: "default-light",
       model: { modelId: "default-light" },
       generationOptions: { structuredOutputMode: "json" },
+      configuration: {
+        adapter: "@ai-sdk/openai-compatible",
+        protocol: "chat-completions",
+        endpoint: "https://llm.example/v1",
+        revision: "1",
+      },
     });
     expect(chatModel).toHaveBeenCalledWith("default-light");
   });
@@ -1456,6 +1494,140 @@ describe("unified server composition", () => {
     ]);
   });
 
+  it("freezes one generation snapshot for its digest and dispatch even when the resolver reuses mutable options", async () => {
+    const model = createRepeatingDeterministicModel({ text: "done" });
+    const dispatch = vi.spyOn(model, "doGenerate");
+    const shared = {
+      reasoning: "low" as "low" | "high",
+      recommendedDurationMs: 1000,
+    };
+    const composition = createMessageComposition(
+      () => ({
+        providerId: "same",
+        modelId: "same",
+        model,
+        generationOptions: shared,
+        configuration: {
+          adapter: "synthetic",
+          protocol: "local",
+          endpoint: "local",
+          revision: "1",
+        },
+      }),
+      { moduleConfigs: createFirstPartyModuleConfigDefaults("test") },
+    );
+    const first = composition.modelTask.resolveModel({ tier: "heavy" });
+    shared.reasoning = "high";
+    shared.recommendedDurationMs = 2;
+    const result = await composition.modelTask.client.generate({
+      modelId: "same",
+      outputMode: "text",
+      outputSchema: z.string(),
+      messages: [{ role: "user", content: "synthetic" }],
+    });
+    expect((dispatch.mock.calls[0]![0] as any).reasoning).toBe("low");
+    expect(result.recommendedDurationMs).toBe(1000);
+    expect(
+      composition.modelTask.resolveModel({ tier: "heavy" }).configurationDigest,
+    ).not.toBe(first.configurationDigest);
+  });
+
+  it("keeps concurrent routes with identical provider/model ids bound to their own model objects and configuration", async () => {
+    const make = (text: string) => ({
+      providerId: "same",
+      modelId: "same",
+      model: createRepeatingDeterministicModel({ text }),
+      configuration: {
+        adapter: "synthetic",
+        protocol: "local",
+        endpoint: "local",
+        revision: text,
+      },
+    });
+    const a = make("a"),
+      b = make("b");
+    const composition = createMessageComposition(() => a, {
+      moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
+      nativeTaskModels: [a, b].map((model, i) => ({
+        definitionId: "agent.heavy",
+        taskId: "task",
+        routeId: String(i),
+        tier: "heavy",
+        resolve: () => model,
+      })),
+    });
+    const run = async (routeId: string) => {
+      const identity = composition.modelTask.resolveModel({
+        tier: "heavy",
+        routeId,
+      });
+      await Promise.resolve();
+      const generation = await composition.modelTask.client.generate({
+        modelId: identity.modelId,
+        messages: [{ role: "user", content: "synthetic" }],
+        outputMode: "object",
+        outputSchema: z.object({ text: z.string() }),
+      });
+      return { identity, output: generation.output };
+    };
+    const results = await Promise.all([run("0"), run("1")]);
+    expect(results.map((r) => r.output)).toEqual([
+      { text: "a" },
+      { text: "b" },
+    ]);
+    expect(results[0]!.identity.configurationDigest).not.toBe(
+      results[1]!.identity.configurationDigest,
+    );
+  });
+
+  it("isolates an explicitly approved GUI task model from the ordinary Heavy model", async () => {
+    const chat = createRepeatingDeterministicModel({ text: "chat" }),
+      gui = createRepeatingDeterministicModel({ text: "gui" });
+    const composition = createMessageComposition(
+      () => ({ providerId: "chat", modelId: "heavy-current", model: chat }),
+      {
+        moduleConfigs: createFirstPartyModuleConfigDefaults("test"),
+        nativeTaskModels: [
+          {
+            definitionId: "agent.heavy",
+            taskId: "agent.gui.inspect",
+            routeId: "gui.approved",
+            tier: "heavy",
+            resolve: () => ({
+              providerId: "approved-vision",
+              modelId: "gui-specific",
+              model: gui,
+            }),
+          },
+        ],
+      },
+    );
+    expect(composition.modelTask.resolveModel({ tier: "heavy" })).toEqual({
+      providerId: "chat",
+      modelId: "heavy-current",
+    });
+    expect(
+      composition.modelTask.resolveModel({
+        tier: "heavy",
+        routeId: "gui.approved",
+      }),
+    ).toEqual({ providerId: "approved-vision", modelId: "gui-specific" });
+    expect(composition.modelTask.approvals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId: "agent.gui.inspect",
+          selectionPolicy: { tier: "heavy", routeId: "gui.approved" },
+        }),
+      ]),
+    );
+    expect(() =>
+      composition.modelTask.resolveModel({ tier: "heavy", routeId: "missing" }),
+    ).toThrow("Unapproved task model route");
+    expect(composition.modelTask.resolveModel({ tier: "heavy" })).toEqual({
+      providerId: "chat",
+      modelId: "heavy-current",
+    });
+  });
   it("keeps Memory disabled unless composition explicitly enables it", () => {
     expect(
       createMessageComposition(undefined, {

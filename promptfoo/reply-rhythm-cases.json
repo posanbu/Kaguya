@@ -1,0 +1,38 @@
+[
+  {
+    "description": "离线编译：direct-question",
+    "vars": {
+      "caseId": "direct-question"
+    }
+  },
+  {
+    "description": "离线编译：joke",
+    "vars": {
+      "caseId": "joke"
+    }
+  },
+  {
+    "description": "离线编译：complaint",
+    "vars": {
+      "caseId": "complaint"
+    }
+  },
+  {
+    "description": "离线编译：followup",
+    "vars": {
+      "caseId": "followup"
+    }
+  },
+  {
+    "description": "离线编译：multiple-topics",
+    "vars": {
+      "caseId": "multiple-topics"
+    }
+  },
+  {
+    "description": "离线编译：missing-media",
+    "vars": {
+      "caseId": "missing-media"
+    }
+  }
+]

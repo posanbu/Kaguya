@@ -4,15 +4,10 @@
  * 主要职责：将搜索和筛选转换为只读 Inspection 查询，保持稳定游标；实体选择加载独立详情并允许追溯原始 Atom。
  * 代码库关系：ModulePages 在模块声明 surface 时挂载本组件；布局来自 Manifest，数据由版本化 surface DTO 提供。
  * 输入输出与副作用：Inspection 继续只读；人物详情只读展示实体、绑定与识别记录，记忆内容在 Memory 工作台管理。
- */
-/**
- * 功能概述：渲染模块 Manifest 声明的受控检查 Surface；首版提供状态摘要、实体主从浏览、关系列表、时间线与关系图。
- * model-request-browser 分派给独立 RequestSurface，按持久化模型请求提供目录与详情。
- * 主要职责：将搜索和筛选转换为只读 Inspection 查询，保持稳定游标；实体选择加载独立详情并允许追溯原始 Atom。
- * 代码库关系：ModulePages 在模块声明 surface 时挂载本组件；布局来自 Manifest，数据由版本化 surface DTO 提供。
- * 输入输出与副作用：Inspection 继续只读；人物详情只读展示实体、绑定与识别记录，记忆内容在 Memory 工作台管理。
+ * LifecycleSurface 显式切换活动、睡眠、观察和调度；沿用同一模块 Manifest 与持久事实，不另造状态源。
  */
 import { RecordSurface } from "./RecordSurface.js";
+import { useWorkbenchNavigate } from "./components/AppShell.js";
 
 import { GateSurface } from "./GateSurface.js";
 import { RequestSurface } from "./RequestSurface.js";
@@ -36,6 +31,7 @@ import { Button, FieldMessage } from "./components/ui.js";
 import { InspectionFields, InspectionStatus } from "./InspectionFields.js";
 import {
   InspectionPager,
+  ModuleRuntimeSection,
   type InspectionDetailProps,
 } from "./ModuleRuntimeSection.js";
 import { useInspection } from "./use-inspection.js";
@@ -49,6 +45,68 @@ interface ModuleSurfaceProps {
 }
 /** 分派组件不持有 Hook，跨模块导航时按 definitionId 隔离搜索、选择和异步详情状态。 */
 export function ModuleSurface(props: ModuleSurfaceProps) {
+  if (props.module.definitionId === "agent.lifecycle")
+    return <LifecycleSurface {...props} />;
+  return <DeclaredSurface {...props} />;
+}
+function LifecycleSurface(props: ModuleSurfaceProps) {
+  const location =
+    props.path ??
+    (typeof window === "undefined"
+      ? "/developer/modules/agent.lifecycle"
+      : window.location.pathname + window.location.search);
+  const navigate = useWorkbenchNavigate();
+  const active =
+    new URLSearchParams(location.split("?")[1]).get("lifecycle") ?? "activity";
+  const options = [
+    { id: "activity", title: "当前活动", view: "activity" },
+    { id: "sleep", title: "睡眠与唤醒", view: "gates" },
+    { id: "observation", title: "观察", view: "gates" },
+    { id: "schedules", title: "调度", view: "schedules" },
+  ];
+  const chosen = options.find((option) => option.id === active) ?? options[0]!;
+  const views =
+    props.module.inspection?.views.filter((view) => view.id === chosen.view) ??
+    [];
+  const module = {
+    ...props.module,
+    inspection: { ...props.module.inspection!, views },
+  };
+  return (
+    <section aria-label="Lifecycle 领域视图">
+      <nav className="domain-tabs" aria-label="生命周期视图">
+        {options.map((option) => (
+          <Button
+            key={option.id}
+            aria-pressed={chosen.id === option.id}
+            onClick={() => {
+              const params = new URLSearchParams(location.split("?")[1]);
+              params.set("lifecycle", option.id);
+              void navigate(`${location.split("?")[0]}?${params}`);
+            }}
+          >
+            {option.title}
+          </Button>
+        ))}
+      </nav>
+      {chosen.id === "observation" ? (
+        <DeclaredSurface {...props} />
+      ) : (
+        <ModuleRuntimeSection
+          key={chosen.id}
+          {...props}
+          module={module}
+          fixedKind={
+            chosen.id === "sleep"
+              ? "agent.attention.arousal.state.recorded"
+              : undefined
+          }
+        />
+      )}
+    </section>
+  );
+}
+function DeclaredSurface(props: ModuleSurfaceProps) {
   const surface = props.module.inspection?.surface;
   const requests = surface?.components.find(
     (component) => component.type === "model-request-browser",

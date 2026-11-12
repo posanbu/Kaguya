@@ -2,6 +2,7 @@
 """功能概述：离线参与评测 CLI，串联 core.py 的冻结与 baseline.py 的统计评分。
 
 主要职责：prepare 命令读取版本化 journal/config 并分开写 inputs、labels、sources；
+memory-requests 只导出旧历史请求；prepare 可导入 native-memory.ts 的绑定响应。
 preview 只读取输入及校验清单，不打开标签，写出完整候选请求；evaluate 验证清单
 后训练历史统计、选择 dev 阈值并报告 test。write_bundle 以独占目录防覆盖，
 verify_bundle 校验协议和工件哈希；main 是唯一命令入口。
@@ -20,13 +21,14 @@ from pathlib import Path
 
 from baseline import evaluate as evaluate_policy
 from core import PROTOCOL, digest, encoded, load_corpus, prepare_samples
+from memory_native import ADAPTER, NativeRequests, NativeSnapshots
 
 ROOT = Path(__file__).resolve().parent
 
 
 def code_hash() -> str:
-    return digest(b"".join(path.name.encode() + b"\0" + path.read_bytes() for path in sorted(ROOT.glob("*.py"))
-                           if not path.name.startswith("test_")))
+    return digest(b"".join(path.name.encode() + b"\0" + path.read_bytes() for path in sorted([*ROOT.glob("*.py"), *ROOT.glob("native-memory*.ts")])
+                           if not path.name.startswith("test_") and not path.name.endswith(".test.ts")))
 
 
 def jsonl(rows: list) -> bytes:
@@ -72,15 +74,30 @@ def read_rows(path: Path) -> list:
     return [json.loads(line) for line in path.read_bytes().splitlines() if line.strip()]
 
 
-def prepare(source: Path, config: Path, output: Path) -> dict:
+def memory_requests(source: Path, config: Path, output: Path) -> dict:
     corpus, source_hash, config_hash = load_corpus(source, config)
-    inputs, labels, counts = prepare_samples(corpus, source_hash, config_hash)
+    adapter = NativeRequests()
+    prepare_samples(corpus, source_hash, config_hash, memory=adapter)
+    requests = sorted(adapter.requests.values(), key=lambda row: row["requestId"])
+    return write_bundle(output, {"memory-requests.jsonl": jsonl(requests)}, {
+        "stage": "memory_requests", "data_kind": corpus.config["dataKind"],
+        "source_sha256": source_hash, "config_sha256": config_hash,
+        "memory_adapter": ADAPTER, "requests": len(requests), "network_requests": 0})
+
+
+def prepare(source: Path, config: Path, output: Path, native_memory: Path | None = None) -> dict:
+    corpus, source_hash, config_hash = load_corpus(source, config)
+    adapter = NativeSnapshots(native_memory) if native_memory is not None else None
+    inputs, labels, counts = prepare_samples(corpus, source_hash, config_hash, memory=adapter)
+    if adapter is not None:
+        adapter.assert_complete()
     files = {"inputs.jsonl": jsonl(inputs), "labels.jsonl": jsonl(labels),
              "sources.jsonl": jsonl(corpus.source_index), "config.json": encoded(corpus.config)}
     return write_bundle(output, files, {"stage": "prepared", "data_kind": corpus.config["dataKind"],
                         "source_sha256": source_hash, "config_sha256": config_hash,
                         "dataset_sha256": digest(files["inputs.jsonl"] + files["labels.jsonl"]),
-                        "counts": counts})
+                        "counts": counts, "memory_adapter": ADAPTER if adapter else "empty/v1",
+                        "memory_responses_sha256": adapter.source_sha256 if adapter else None})
 
 
 def preview(dataset: Path, output: Path) -> dict:
@@ -98,7 +115,9 @@ def evaluate(dataset: Path, output: Path) -> dict:
     inputs, labels = (read_rows(dataset / name) for name in ("inputs.jsonl", "labels.jsonl"))
     config = json.loads((dataset / "config.json").read_text(encoding="utf-8"))
     summary, predictions, runtime = evaluate_policy(inputs, labels, config["minGroupSamples"])
-    summary.update(dataKind=meta["data_kind"], purpose="pipeline_validation" if meta["data_kind"] == "synthetic" else "private_participation_evaluation")
+    summary.update(memoryAdapter=meta.get("memory_adapter", "empty/v1"),
+                   memoryEffectEvaluated=False, predictorUsesMemory=False,
+                   dataKind=meta["data_kind"], purpose="pipeline_validation" if meta["data_kind"] == "synthetic" else "private_participation_evaluation")
     files = {"predictions.jsonl": jsonl(predictions), "summary.json": encoded(summary)}
     return write_bundle(output, files, {"stage": "evaluated", "data_kind": meta["data_kind"],
                           "source_sha256": meta["source_sha256"], "dataset_sha256": meta["dataset_sha256"],
@@ -111,10 +130,13 @@ def evaluate(dataset: Path, output: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Kaguya offline participation benchmark (no network)")
     sub = parser.add_subparsers(dest="command", required=True)
-    prep = sub.add_parser("prepare")
-    prep.add_argument("--source", type=Path, required=True)
-    prep.add_argument("--config", type=Path, required=True)
-    prep.add_argument("--output", type=Path, required=True)
+    for name in ("prepare", "memory-requests"):
+        prep = sub.add_parser(name)
+        prep.add_argument("--source", type=Path, required=True)
+        prep.add_argument("--config", type=Path, required=True)
+        prep.add_argument("--output", type=Path, required=True)
+        if name == "prepare":
+            prep.add_argument("--native-memory", type=Path)
     for name in ("preview", "evaluate"):
         command = sub.add_parser(name)
         command.add_argument("--dataset", type=Path, required=True)
@@ -122,7 +144,9 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.command == "prepare":
-            result = prepare(args.source, args.config, args.output)
+            result = prepare(args.source, args.config, args.output, args.native_memory)
+        elif args.command == "memory-requests":
+            result = memory_requests(args.source, args.config, args.output)
         else:
             result = {"preview": preview, "evaluate": evaluate}[args.command](args.dataset, args.output)
     except (ValueError, KeyError, TypeError, OSError) as error:

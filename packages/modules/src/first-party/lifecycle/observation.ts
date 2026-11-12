@@ -4,7 +4,9 @@
  * 代码库关系：Catalog 与管理表单共用 schema，Host 负责创建实例。
  * 输入输出与副作用：字段声明无副作用；订阅处理写入调度原子，不直接发送消息。
  * heartbeatObservationSelector 只读取开放集合与最近水位；开放期间入站账本即待观察集合。
- * 入站按 scope 直接竞争唯一候选；due 仅恢复 Light wait/interrupt，终态 resume 合并期间新输入。
+ * 入站按完整 scene 身份竞争唯一候选；scopeKey 继续作为旧账本查询别名
+ * 新调度保存 sceneAddress，恢复旧调度时沿显式来源引用校验归属。
+ * 入站直接竞争唯一候选；due 仅恢复 Light wait/interrupt，终态 resume 合并期间新输入。
  * isImmediateObservation 识别私聊、@ 与回复机器人，用于唤醒休眠状态和提升已有观察。
  * inspection 声明本模块的只读机制、领域数据和历史视图，由 Host/Server 投影给开发者控制台。
  * 入站经 observationCapability 发现持久接收边界，连续成功事实用于后继候选；空水位保留 null，不作为字符串 cursor。
@@ -16,7 +18,7 @@ import {
 } from "../observation.js";
 import { observationCapability } from "@kaguya/sdk";
 import { firstPartyInspection } from "../inspection.js";
-import { z } from "@kaguya/schema";
+import { z, sceneIdentity } from "@kaguya/schema";
 import { defineInformationModule, onInformation } from "@kaguya/sdk";
 import {
   oneShotDueInformationKind,
@@ -226,6 +228,11 @@ export const heartbeatModule = defineInformationModule({
       );
       const input = {
         heartbeatInformationId: heartbeat.informationId,
+        sceneAddress: {
+          platform: source.platform,
+          adapterId: source.adapterId,
+          destination: source.destination,
+        },
         scopeKey,
         reason,
         sourceInformationIds: orderedSourceIds,
@@ -321,7 +328,8 @@ export const heartbeatModule = defineInformationModule({
               const pending = selected.filter(
                 (item) =>
                   item.kind === inboundTextInformationKind.kind &&
-                  scopeOf((item.payload as any).source) === p.scopeKey,
+                  sceneIdentity((item.payload as any).source) ===
+                    sceneIdentity(p),
               );
               const latest = pending.at(-1);
               if (!latest) continue;
@@ -340,7 +348,14 @@ export const heartbeatModule = defineInformationModule({
                   (item.kind === "agent.observation.progress.v1" ||
                     item.kind === "agent.router.turn.context.completed" ||
                     item.kind === "agent.heavy.step.observed") &&
-                  item.payload.scopeKey === previousCandidate.payload.scopeKey,
+                  (item.payload.sceneId === sceneIdentity(p) ||
+                    item.references.some(
+                      (ref) =>
+                        ref.relation === "agent:turn-candidate" &&
+                        ref.informationId === previousCandidate.informationId,
+                    ) ||
+                    item.payload.candidateInformationId ===
+                      previousCandidate.informationId),
               );
               const signals = [
                 ...new Set([
@@ -355,11 +370,11 @@ export const heartbeatModule = defineInformationModule({
               ];
               await context.registerOnce(
                 "agent.heartbeat.candidate",
-                `${atom.informationId}:${String(p.scopeKey)}`,
+                `${atom.informationId}:${sceneIdentity(p)}`,
                 turnCandidateInformationKind,
                 {
                   openScope: {
-                    key: String(p.scopeKey),
+                    key: sceneIdentity(p),
                     terminalGroup: "agent.router.turn.terminal",
                   },
                   payload: {
@@ -557,7 +572,7 @@ export const heartbeatModule = defineInformationModule({
                 turnCandidateInformationKind,
                 {
                   openScope: {
-                    key: scopeOf(atom.payload.source),
+                    key: sceneIdentity(atom.payload.source),
                     terminalGroup: "agent.router.turn.terminal",
                   },
                   payload: {
@@ -788,7 +803,7 @@ export const heartbeatModule = defineInformationModule({
                 turnCandidateInformationKind,
                 {
                   openScope: {
-                    key: p.scopeKey,
+                    key: sceneIdentity(p),
                     terminalGroup: "agent.router.turn.terminal",
                   },
                   payload: {
@@ -895,7 +910,7 @@ export const heartbeatModule = defineInformationModule({
                   turnCandidateInformationKind,
                   {
                     openScope: {
-                      key: scopeOf((latest.payload as any).source),
+                      key: sceneIdentity((latest.payload as any).source),
                       terminalGroup: "agent.router.turn.terminal",
                     },
                     payload: {

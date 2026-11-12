@@ -1,4 +1,8 @@
 /**
+ * 有序图片输出绑定真实 Heavy 完成链与宿主持久快照，读取资源后再做 W3 终检。
+ * 入站媒体登记独立来源权限，Heavy 请求冻结三档输入，Light 只见元信息。
+ * 恢复先查持久原点，再校验当前批准策略；native 关闭或路由消失时不回落到普通模型请求。
+ * 音频读取在 transport 前核验，缺损标记未执行；投递不确定时不再发送。
  * 入站 expressions 仅透传给插件，Runtime 不推断表情含义或改变调度。
  * 授权消息正文由 composition 注入的渲染器提供；Runtime 只传冻结变量并维持权限检查。
  * Runtime 只接收 outboundAllowlist；目标授权与最终 transport 前终检使用它，入站权限属于 AdapterHost。
@@ -13,6 +17,8 @@
  * 代码库关系：依赖 Database、Core、ModuleHost 和平台适配契约；具体 Agent 列表与 LLM 模型绑定位于 apps composition root。
  * 输入输出与副作用：连接、迁移、账本写入和 transport I/O 均在生命周期内执行；close 拒绝新入口并停止可靠领取。
  * 数据库初始化错误脱敏；只关闭自行创建的连接。submit 的 deliveries 是当次实际收集快照，可靠链通常异步完成。
+ * guiTasks 仅向管理 Server 提供独立任务入口；私有 WeakMap 复用同一个 NativeToolLoop，模块不能提交 GUI 任务或 native 内部字段。
+ * nativeTools 可选注入宿主工具目录，经批准任务协调持久原生循环；独立 route 不替换 Heavy 全局模型。
  * Model Task 由 composeModelTaskCapabilities 注入批准的 ModelTaskClient；ApprovedModelTaskClient
  * 校验宿主 activation/tier 白名单，provider、resolver、Core 与 approval 数据均保存在私有字段，
  * 模块只通过 #76 的 context.use 获得通用能力。缺少批准或无效 capability 在任何 create 前拒绝。
@@ -23,11 +29,17 @@
  * 启动注入数据库 observationCapability，Memory 热重载保留同一绑定；观察端口不改变平台投递和 Memory 发布的状态拥有者。
  */
 import {
+  nativeToolInformationKinds,
+  actionDecisionInformationKind,
+} from "@kaguya/sdk";
+import {
   MessageTargetService,
   type AuthorizedMessagePromptRenderer,
 } from "./message-targets.js";
 import type { TargetDirectory } from "@kaguya/platform-adapters";
 import { GatewayAllowlist } from "./gateway-allowlist.js";
+import { mediaResourceRetentionGuard } from "./media-resource-retention.js";
+import { resolveOutboundImages } from "./media-output.js";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -89,6 +101,18 @@ import type {
   OutboundMessageContent,
   PlatformDestination,
 } from "@kaguya/schema";
+import { outboundMessageContentSchema } from "@kaguya/schema";
+import { createNativeMemoryTools } from "./native-memory-tools.js";
+import {
+  NativeToolLoop,
+  type NativeToolLoopOptions,
+} from "./native-tool-loop.js";
+import { ActionExecutor, type ActionExecutorOptions } from "./action.js";
+import {
+  actionCapability,
+  actionRunValidityCapability,
+  type ActionProvider,
+} from "@kaguya/sdk";
 import { defineInformationSelector, observationCapability } from "@kaguya/sdk";
 import type {
   InformationKindDefinition,
@@ -97,7 +121,9 @@ import type {
   InformationModuleCatalog,
   ModuleCapabilityImplementation,
   ModuleActivationProvenance,
+  MediaResourceStore,
 } from "@kaguya/sdk";
+import { mediaResourceStoreCapability } from "@kaguya/sdk";
 import {
   ModelTaskClient,
   modelTaskCapability,
@@ -115,9 +141,24 @@ import {
   modelTaskInformationKinds,
 } from "./information-kinds.js";
 
+import {
+  createMediaVisionObserver,
+  type MediaVisionTaskOptions,
+} from "./media-vision.js";
+import {
+  ingestMediaContent,
+  prepareHeavyMedia,
+  selectedMedia,
+  type MediaInputOptions,
+} from "./media-input.js";
+import { sceneIdentity, platformDestinationSchema } from "@kaguya/schema";
+import { GuiTaskService } from "./gui-tasks.js";
+const hostNativeLoops = new WeakMap<ModelTaskClient, NativeToolLoop>();
+
 export interface RuntimeModelTaskApproval {
   readonly activation: ModuleActivationProvenance;
   readonly selectionPolicy: ModelTaskRequest<unknown>["selectionPolicy"];
+  readonly taskId?: string;
 }
 export type RuntimeModelTaskOptions = Pick<
   ModelTaskClientOptions,
@@ -159,6 +200,16 @@ function isMemoryCapability(id: string): boolean {
 }
 
 type KaguyaRuntimeBaseOptions = {
+  /** 媒体接入与识图由宿主配置；Light 只读元信息。 */
+  readonly mediaInput?: MediaInputOptions;
+  /** external 仅使用已批准的模型端口，复用持久 ModelTask。 */
+  readonly mediaVisionTask?: MediaVisionTaskOptions;
+  readonly nativeTools?: NativeToolLoopOptions;
+  readonly actionProviders?: readonly ActionProvider[];
+  readonly actionEnvironment?: Pick<
+    ActionExecutorOptions,
+    "resolveLeaseCredential" | "validateEnvironment"
+  >;
   /** 由 composition 注入已选择 default/local 的授权消息渲染器。 */
   readonly authorizedMessagePromptRenderer?: AuthorizedMessagePromptRenderer;
   /** 当前生效的出站策略；未注入时非 Web 默认拒绝。 */
@@ -174,6 +225,10 @@ type KaguyaRuntimeBaseOptions = {
   readonly catalog: InformationModuleCatalog;
   readonly activations: readonly InformationModuleActivation[];
   readonly capabilities?: RuntimeCapabilities;
+  /** 宿主控制的持久媒体存储；模块和最终投递共享同一个实例。 */
+  readonly mediaResources?: MediaResourceStore;
+  /** 媒体在最后写入七天后可清理；历史 Atom 仍保留元数据并明确投递失败。 */
+  readonly mediaRetentionMs?: number;
   readonly retrievalStrategies?: readonly InformationRetrievalStrategy[];
   /** 可选长期原文索引默认关闭；原始事件投影始终运行。 */
   readonly memory?: RuntimeMemoryOptions;
@@ -289,6 +344,11 @@ type DeliveryRequestedAtom = DeepReadonly<
       platform: string;
       destination: PlatformDestination;
       message: OutboundMessageContent;
+      turn?: {
+        claimInformationId: string;
+        candidateInformationId: string;
+        contextInformationId: string;
+      } | null;
     }
   >
 >;
@@ -328,6 +388,14 @@ export class KaguyaRuntime implements InformationIngress {
   #hostCapabilities: readonly ModuleCapabilityImplementation[] = [];
   #memoryOptions: RuntimeMemoryOptions = { enabled: false };
   #nativeAccess: NativeMemoryAccess | undefined;
+  #guiTasks: GuiTaskService | undefined;
+  get guiTasks(): GuiTaskService | undefined {
+    return this.#state === "started" ? this.#guiTasks : undefined;
+  }
+  #actionExecutor: ActionExecutor | undefined;
+  get actions(): ActionExecutor {
+    return required(this.#actionExecutor, "action executor");
+  }
   #nativeFacade(access: NativeMemoryAccess): NativeMemoryAccess {
     this.#nativeAccess = access;
     return new Proxy(access, {
@@ -676,7 +744,51 @@ export class KaguyaRuntime implements InformationIngress {
             })
           : this.options.capabilities;
       const enabledSuppliedCapabilities = suppliedCapabilities ?? [];
+      await database.actions.recoverExpired();
+      if (
+        this.options.actionProviders?.some(
+          (p) => p.id === "core.native-memory",
+        ) ||
+        this.options.nativeTools?.registrations.some(
+          (t) => t.providerId === "core.native-memory",
+        )
+      )
+        throw new Error("Reserved native Memory provider");
+      const memoryTools =
+        this.options.nativeTools?.memory && memoryEnabled
+          ? createNativeMemoryTools(database)
+          : undefined;
+      const nativeOptions =
+        this.options.nativeTools && memoryTools
+          ? {
+              ...this.options,
+              nativeTools: {
+                ...this.options.nativeTools,
+                registrations: [
+                  ...this.options.nativeTools.registrations,
+                  ...memoryTools.registrations,
+                ],
+              },
+            }
+          : this.options;
+      this.#actionExecutor = new ActionExecutor({
+        store: database.actions,
+        providers: [
+          ...(this.options.actionProviders ?? []),
+          ...(memoryTools ? [memoryTools.provider] : []),
+        ],
+        core,
+        ...this.options.actionEnvironment,
+        onRecoveryError: () =>
+          this.#runtimeLogger?.error(
+            { event: "action.recovery.failed" },
+            "Action recovery failed; the next bounded scan will retry",
+          ),
+      });
+      this.#actionExecutor.startRecovery();
       const capabilities = [
+        { capability: actionCapability, value: this.#actionExecutor },
+        { capability: actionRunValidityCapability, value: database.actions },
         { capability: observationCapability, value: database.observations },
         { capability: rawContextCapability, value: database.rawEvents },
         {
@@ -710,14 +822,48 @@ export class KaguyaRuntime implements InformationIngress {
               this.#messageTargets!.stage(assistant),
           }),
         },
+        ...(this.options.mediaResources
+          ? [
+              {
+                capability: mediaResourceStoreCapability,
+                value: this.options.mediaResources,
+              },
+            ]
+          : []),
         ...composeModelTaskCapabilities(
-          this.options,
+          nativeOptions,
           { core, now: this.#now, oneShotSchedule },
           enabledSuppliedCapabilities,
+          { db: database, actions: this.#actionExecutor },
         ),
       ];
 
       this.#hostCapabilities = capabilities;
+      const modelClient = capabilities.find(
+        (c) => c.capability.id === modelTaskCapability.id,
+      )?.value;
+      const nativeLoop =
+        modelClient instanceof ModelTaskClient
+          ? hostNativeLoops.get(modelClient)
+          : undefined;
+      if (nativeLoop)
+        this.#guiTasks = new GuiTaskService({
+          db: database,
+          core,
+          loop: nativeLoop,
+          host: nativeOptions.nativeTools?.guiTasks,
+          activations: this.options.activations,
+        });
+      if (this.options.mediaResources) {
+        const retentionMs =
+          this.options.mediaRetentionMs ?? 7 * 24 * 60 * 60 * 1000;
+        if (!Number.isSafeInteger(retentionMs) || retentionMs < 60_000)
+          throw new Error("Invalid media retention period");
+        await this.options.mediaResources.cleanupExpired(
+          new Date(this.#now().getTime() - retentionMs),
+          mediaResourceRetentionGuard(database.sql),
+        );
+      }
       this.#memoryOptions = this.options.memory ?? { enabled: false };
       const moduleHost = new ModuleHost({
         drainTimeoutMs: this.options.drainTimeoutMs ?? 5000,
@@ -846,6 +992,7 @@ export class KaguyaRuntime implements InformationIngress {
       this.#state === "starting" ? this.#startPromise : undefined;
     this.#state = "closing";
     this.#closePromise = (async () => {
+      await this.#actionExecutor?.close();
       // scheduler 必须先停止，随后再让 ModuleHost abort 正在等待的启动或 handler。
       await this.#oneShotScheduler?.stop().catch(() => undefined);
       if (options.drain) {
@@ -878,6 +1025,11 @@ export class KaguyaRuntime implements InformationIngress {
     if (this.#cleanupPromise !== undefined) return this.#cleanupPromise;
     this.#cleanupPromise = (async () => {
       const failures: unknown[] = [];
+      try {
+        await this.#actionExecutor?.close();
+      } catch (error) {
+        failures.push(error);
+      }
       if (this.#rawProjectionTimer) clearInterval(this.#rawProjectionTimer);
       this.#rawProjectionTimer = undefined;
       if (this.#rawProjectionPromise)
@@ -1019,11 +1171,18 @@ export class KaguyaRuntime implements InformationIngress {
     const receipts: PlatformDeliveryReceipt[] = [];
     this.#deliveriesByContext.set(context.informationId, receipts);
     try {
+      const contentSegments = await ingestMediaContent(
+        input,
+        required(this.#database, "database").mediaSources,
+        this.options.mediaResources,
+        this.options.mediaInput,
+      );
       await core.register(inboundTextInformationKind, {
         occurredAt: input.occurredAt,
         source: "runtime:ingress",
         payload: {
           text: input.text,
+          ...(contentSegments ? { contentSegments } : {}),
           source: {
             adapterId: input.adapterId,
             platform: input.platform,
@@ -1073,6 +1232,37 @@ export class KaguyaRuntime implements InformationIngress {
     )
       return;
     const context = uniqueContextReference(request);
+    const durableOutcome = await required(
+      this.#database,
+      "database",
+    ).actions.deliveryResult(request.informationId);
+    if (durableOutcome) {
+      if (durableOutcome.status === "succeeded")
+        await core.commitTerminal(
+          "kaguya.delivery.result.v1",
+          request.informationId,
+          deliveryDeliveredInformationKind,
+          {
+            occurredAt: this.#now().toISOString(),
+            source: "runtime:delivery",
+            payload: deliveryDeliveredInformationKind.payloadSchema.parse(
+              durableOutcome.result,
+            ),
+            references: deliveryResultReferences(
+              request.informationId,
+              context.informationId,
+            ),
+          },
+        );
+      else
+        await this.#registerDeliveryFailure(
+          request,
+          context.informationId,
+          "Recovered durable action result",
+          durableOutcome.evidence === "not-executed" ? "failed" : "unknown",
+        );
+      return;
+    }
     // Old versions had no started marker. A recovered delivery may already have
     // reached the platform, so an earlier lease is evidence of an unknown result.
     const attempts = await required(this.#database, "database").sql.query<{
@@ -1103,8 +1293,7 @@ export class KaguyaRuntime implements InformationIngress {
         request.payload.platform,
         request.payload.destination,
       ) ||
-      !targetAuthorized ||
-      !this.#messageTargets!.deliveryStillCurrent(request.informationId)
+      !targetAuthorized
     ) {
       await core.commitTerminal(
         "kaguya.delivery.result.v1",
@@ -1152,85 +1341,300 @@ export class KaguyaRuntime implements InformationIngress {
       throw error;
     }
 
-    const attemptId = randomUUID();
-    const started = await core.registerOnce(
-      "kaguya.delivery.started.v1",
+    const actionStore = required(this.#database, "database").actions;
+    const action = await actionStore.prepareDelivery(
       request.informationId,
-      deliveryStartedInformationKind,
-      {
-        occurredAt: this.#now().toISOString(),
-        source: "runtime:delivery",
-        payload: { attemptId },
-        references: [
-          { relation: "core:caused-by", informationId: request.informationId },
-          { relation: "core:context", informationId: context.informationId },
-        ],
-      },
+      core.executionClaim,
     );
-    if (started.payload.attemptId !== attemptId) {
-      await this.#registerDeliveryFailure(
-        request,
-        context.informationId,
-        "Delivery result is unknown after recovery",
-        "unknown",
-      );
+    const admission = await actionStore.admit(
+      action.intentId,
+      action.intent.scope,
+      300000,
+      core.executionClaim,
+    );
+    if (!admission.claim) {
+      if (
+        admission.view.state === "rejected" ||
+        admission.view.state === "cancelled" ||
+        admission.view.state === "superseded"
+      ) {
+        await this.#registerDeliveryFailure(
+          request,
+          context.informationId,
+          "Action admission rejected",
+        );
+      } else {
+        await this.#registerDeliveryFailure(
+          request,
+          context.informationId,
+          "Action result is unknown after recovery",
+          "unknown",
+        );
+      }
       return;
     }
-    let receipt: PlatformDeliveryReceipt;
+    const actionClaim = admission.claim;
     try {
-      receipt = await registration.transport.sendMessage(
-        request.payload.destination,
-        request.payload.message,
-        { rootInformationId: context.informationId },
+      const attemptId = actionClaim.attemptId;
+      const started = await core.registerOnce(
+        "kaguya.delivery.started.v1",
+        request.informationId,
+        deliveryStartedInformationKind,
+        {
+          occurredAt: this.#now().toISOString(),
+          source: "runtime:delivery",
+          payload: { attemptId },
+          references: [
+            {
+              relation: "core:caused-by",
+              informationId: request.informationId,
+            },
+            { relation: "core:context", informationId: context.informationId },
+          ],
+        },
       );
-    } catch (cause) {
-      await this.#registerDeliveryFailure(
-        request,
-        context.informationId,
-        "Platform transport result is unknown",
-        "unknown",
+      if (started.payload.attemptId !== attemptId) {
+        await this.#registerDeliveryFailure(
+          request,
+          context.informationId,
+          "Delivery result is unknown after recovery",
+          "unknown",
+        );
+        return;
+      }
+      let media:
+        | Awaited<ReturnType<KaguyaRuntime["resolveAudioForDelivery"]>>
+        | undefined;
+      let images: Awaited<ReturnType<typeof resolveOutboundImages>> | undefined;
+      try {
+        media =
+          request.payload.message.kind === "audio"
+            ? await this.resolveAudioForDelivery(request.payload.message)
+            : undefined;
+        if (request.payload.message.kind === "content") {
+          const db = required(this.#database, "database");
+          images = await resolveOutboundImages({
+            message: request.payload.message,
+            delivery: request,
+            contextId: context.informationId,
+            target: {
+              platform: request.payload.platform,
+              adapterId: request.payload.adapterId,
+              destination: request.payload.destination,
+            },
+            read: (id) => core.get(id),
+            readSnapshot: async (key, scope) =>
+              (
+                await db.sql.query<{ snapshot: JsonValue }>(
+                  "SELECT snapshot FROM media_input_snapshots WHERE request_key=$1 AND scope=$2",
+                  [key, scope],
+                )
+              ).rows[0]?.snapshot,
+            readSource: (id, scope) => db.mediaSources.read(id, scope),
+            resources: this.options.mediaResources,
+            signal: core.executionSignal,
+          });
+        }
+      } catch {
+        await actionStore.finish(
+          actionClaim,
+          action.intent.scope,
+          {
+            status: "rejected",
+            evidence: "not-executed",
+            result: {
+              reason:
+                request.payload.message.kind === "content"
+                  ? "media-resource-invalid"
+                  : "audio-resource-invalid",
+            },
+            artifacts: [],
+            truncated: false,
+          },
+          false,
+          core.executionClaim,
+        );
+        await this.#registerDeliveryFailure(
+          request,
+          context.informationId,
+          request.payload.message.kind === "content"
+            ? "Media source or resource missing or invalid"
+            : "Audio resource missing or invalid",
+        );
+        return;
+      }
+      let receipt: PlatformDeliveryReceipt;
+      const turnClosed =
+        request.payload.turn != null &&
+        (
+          await core.find({
+            kinds: [
+              "agent.router.turn.failed",
+              "agent.router.turn.superseded",
+              "agent.router.turn.silent",
+              "agent.router.turn.waiting",
+              "agent.router.turn.interrupted",
+            ],
+            payloadContains: {
+              claimInformationId: request.payload.turn.claimInformationId,
+            },
+            limit: 1,
+          })
+        ).length > 0;
+      const allowed = await actionStore.canInvoke(
+        actionClaim,
+        action.intent.scope,
       );
-      throw new OutboundTransportError(
-        request.payload.adapterId,
-        request.payload.platform,
-        cause,
-      );
-    }
+      if (
+        !allowed ||
+        turnClosed ||
+        this.#state === "closing" ||
+        this.#state === "closed" ||
+        !(
+          this.options.outboundAllowlist ?? new GatewayAllowlist()
+        ).allowsDestination(
+          request.payload.platform,
+          request.payload.destination,
+        ) ||
+        !this.#messageTargets!.deliveryStillCurrent(request.informationId)
+      ) {
+        await actionStore.finish(
+          actionClaim,
+          action.intent.scope,
+          {
+            status: "cancelled",
+            evidence: "not-executed",
+            result: { reason: "delivery-authority-changed" },
+            artifacts: [],
+            truncated: false,
+          },
+          false,
+          core.executionClaim,
+        );
+        await this.#registerDeliveryFailure(
+          request,
+          context.informationId,
+          "Delivery authority changed before transport",
+        );
+        return;
+      }
+      core.executionSignal?.throwIfAborted();
+      try {
+        receipt = await registration.transport.sendMessage(
+          request.payload.destination,
+          outboundMessageContentSchema.parse(request.payload.message),
+          {
+            rootInformationId: context.informationId,
+            ...(media ? { media } : {}),
+            ...(images ? { images } : {}),
+          },
+        );
+      } catch (cause) {
+        await actionStore.finish(
+          actionClaim,
+          action.intent.scope,
+          {
+            status: "unknown",
+            evidence: "unconfirmed",
+            result: { reason: "transport-unconfirmed" },
+            artifacts: [],
+            truncated: false,
+          },
+          false,
+          core.executionClaim,
+        );
+        await this.#registerDeliveryFailure(
+          request,
+          context.informationId,
+          "Platform transport result is unknown",
+          "unknown",
+        );
+        throw new OutboundTransportError(
+          request.payload.adapterId,
+          request.payload.platform,
+          cause,
+        );
+      }
 
-    if (receipt.ok) {
-      await core.commitTerminal(
-        "kaguya.delivery.result.v1",
-        request.informationId,
-        deliveryDeliveredInformationKind,
+      await actionStore.finish(
+        actionClaim,
+        action.intent.scope,
         {
-          occurredAt: this.#now().toISOString(),
-          source: "runtime:delivery",
-          payload: safeDeliveredPayload(receipt),
-          references: deliveryResultReferences(
-            request.informationId,
-            context.informationId,
-          ),
+          status: receipt.ok
+            ? "succeeded"
+            : receipt.outcome === "rejected-before-effect"
+              ? "rejected"
+              : "unknown",
+          evidence: receipt.ok
+            ? "effect-verified"
+            : receipt.outcome === "rejected-before-effect"
+              ? "not-executed"
+              : "unconfirmed",
+          result: receipt.ok
+            ? safeDeliveredPayload(receipt)
+            : safeFailedDeliveryPayload(receipt),
+          artifacts: [],
+          truncated: false,
         },
+        false,
+        core.executionClaim,
       );
-    } else {
-      await core.commitTerminal(
-        "kaguya.delivery.result.v1",
-        request.informationId,
-        deliveryFailedInformationKind,
-        {
-          occurredAt: this.#now().toISOString(),
-          source: "runtime:delivery",
-          payload: safeFailedDeliveryPayload(receipt),
-          references: deliveryResultReferences(
-            request.informationId,
-            context.informationId,
-          ),
-        },
-      );
+      await actionStore.acknowledge(action.intentId, action.intent.scope);
+      if (receipt.ok) {
+        await core.commitTerminal(
+          "kaguya.delivery.result.v1",
+          request.informationId,
+          deliveryDeliveredInformationKind,
+          {
+            occurredAt: this.#now().toISOString(),
+            source: "runtime:delivery",
+            payload: safeDeliveredPayload(receipt),
+            references: deliveryResultReferences(
+              request.informationId,
+              context.informationId,
+            ),
+          },
+        );
+      } else {
+        await core.commitTerminal(
+          "kaguya.delivery.result.v1",
+          request.informationId,
+          deliveryFailedInformationKind,
+          {
+            occurredAt: this.#now().toISOString(),
+            source: "runtime:delivery",
+            payload: safeFailedDeliveryPayload(receipt),
+            references: deliveryResultReferences(
+              request.informationId,
+              context.informationId,
+            ),
+          },
+        );
+      }
+      this.#deliveriesByContext
+        .get(context.informationId)
+        ?.push(safeRuntimeReceipt(receipt));
+    } finally {
+      await actionStore.release(actionClaim, action.intent.scope);
     }
-    this.#deliveriesByContext
-      .get(context.informationId)
-      ?.push(safeRuntimeReceipt(receipt));
+  }
+
+  private async resolveAudioForDelivery(
+    message: Extract<OutboundMessageContent, { kind: "audio" }>,
+  ) {
+    const resource = await this.options.mediaResources?.get(message.resourceId);
+    if (
+      !resource ||
+      resource.mimeType !== message.mimeType ||
+      resource.sha256 !== message.sha256 ||
+      resource.bytes.byteLength !== message.byteLength
+    )
+      throw new Error("Audio resource is missing or no longer valid");
+    return {
+      bytes: resource.bytes,
+      mimeType: resource.mimeType,
+      sha256: resource.sha256,
+    };
   }
 
   async #registerDeliveryFailure(
@@ -1265,32 +1669,76 @@ export class KaguyaRuntime implements InformationIngress {
 
 class ApprovedModelTaskClient extends ModelTaskClient {
   readonly #approvals: readonly RuntimeModelTaskApproval[];
+  readonly #loop?: NativeToolLoop;
   constructor(
     options: ModelTaskClientOptions,
     approvals: readonly RuntimeModelTaskApproval[],
+    native?: {
+      db: KaguyaDatabase;
+      actions: ActionExecutor;
+      options: NativeToolLoopOptions;
+    },
   ) {
     super(options);
-    this.#approvals = approvals.map(({ activation, selectionPolicy }) => ({
-      activation: Object.freeze({ ...activation }),
-      selectionPolicy: Object.freeze(
-        modelTaskSelectionPolicySchema.parse(selectionPolicy),
-      ),
-    }));
+    if (native)
+      this.#loop = new NativeToolLoop({
+        ...native,
+        core: options.core,
+        resolveModel: (request) => {
+          if (!this.approved(request))
+            throw new Error("Unapproved native model route");
+          return options.resolveModel(request.selectionPolicy);
+        },
+        model: {
+          execute: (request) => super.execute(request),
+          cancel: (request) => super.cancel(request),
+        },
+      });
+    if (this.#loop) hostNativeLoops.set(this, this.#loop);
+    this.#approvals = approvals.map(
+      ({ activation, selectionPolicy, taskId }) => ({
+        ...(taskId ? { taskId } : {}),
+        activation: Object.freeze({ ...activation }),
+        selectionPolicy: Object.freeze(
+          modelTaskSelectionPolicySchema.parse(selectionPolicy),
+        ),
+      }),
+    );
   }
 
-  override execute<TOutput>(request: ModelTaskRequest<TOutput>) {
+  override cancel(request: import("./model-task.js").ModelTaskCancellation) {
+    return this.#loop
+      ? this.#loop.cancelRequest(request)
+      : super.cancel(request);
+  }
+  private approved(request: ModelTaskRequest<unknown>) {
+    return this.#approvals.some(
+      ({ activation, selectionPolicy, taskId }) =>
+        activation.instanceId === request.activation.instanceId &&
+        activation.definitionId === request.activation.definitionId &&
+        selectionPolicy.tier === request.selectionPolicy.tier &&
+        selectionPolicy.routeId === request.selectionPolicy.routeId &&
+        (!selectionPolicy.routeId || taskId === request.task.taskId) &&
+        (!taskId || taskId === request.task.taskId),
+    );
+  }
+  override async execute<TOutput>(request: ModelTaskRequest<TOutput>) {
+    if (request.task?.taskId === "agent.gui.execute")
+      throw new Error("GUI tasks require the host management entry");
+    if (request.nativeStep || request.nativeModelBinding)
+      throw new Error("Native step fields are reserved for the host");
+    // 恢复必须先查稳定原点；关闭 native 或删除路由不会降级成普通新请求。
     if (
-      !this.#approvals.some(
-        ({ activation, selectionPolicy }) =>
-          activation.instanceId === request.activation.instanceId &&
-          activation.definitionId === request.activation.definitionId &&
-          selectionPolicy.tier === request.selectionPolicy.tier,
-      )
+      request.task?.taskId &&
+      request.sourceInformationId &&
+      (await this.#loop?.existing(request))
     )
-      return Promise.reject(
-        new Error("Model task activation or policy is not approved"),
-      );
-    return super.execute(request);
+      return this.#loop!.execute(request);
+    if (!this.approved(request))
+      throw new Error("Model task activation or policy is not approved");
+    return this.#loop?.enabled(request)
+      ? this.#loop.execute(request)
+      : super.execute(request);
   }
 }
 
@@ -1298,6 +1746,7 @@ function composeModelTaskCapabilities(
   options: KaguyaRuntimeOptions,
   context: RuntimeCapabilityContext,
   supplied: readonly ModuleCapabilityImplementation[],
+  native?: { db: KaguyaDatabase; actions: ActionExecutor },
 ): readonly ModuleCapabilityImplementation[] {
   const capabilities = [...supplied];
   if (options.modelTask) {
@@ -1329,8 +1778,82 @@ function composeModelTaskCapabilities(
     capabilities.push({
       capability: modelTaskCapability,
       value: new ApprovedModelTaskClient(
-        { ...options.modelTask, ...context },
+        {
+          ...options.modelTask,
+          ...context,
+          ...(options.nativeTools?.readArtifact
+            ? { readNativeArtifact: options.nativeTools.readArtifact }
+            : {}),
+          ...(native
+            ? {
+                prepareMedia: async (key, request, model) => {
+                  const refs = selectedMedia(request.contextAtoms);
+                  if (!refs.length) return [];
+                  const source = request.contextAtoms.find(
+                    (a) => a.informationId === request.sourceInformationId,
+                  );
+                  const target = source?.payload.target as
+                    | {
+                        platform?: string;
+                        adapterId?: string;
+                        destination?: unknown;
+                      }
+                    | undefined;
+                  const destination = platformDestinationSchema.safeParse(
+                    target?.destination,
+                  );
+                  const scope =
+                    destination.success && target?.platform && target.adapterId
+                      ? sceneIdentity({
+                          platform: target.platform,
+                          adapterId: target.adapterId,
+                          destination: destination.data,
+                        })
+                      : "unresolved-media-scope";
+                  const mediaOptions =
+                    options.mediaInput &&
+                    options.mediaInput.mode === "external" &&
+                    options.mediaVisionTask
+                      ? {
+                          ...options.mediaInput,
+                          observe: createMediaVisionObserver(
+                            context.core,
+                            native.db.mediaSources,
+                            scope,
+                            options.mediaVisionTask,
+                            request,
+                          ),
+                        }
+                      : options.mediaInput;
+                  return prepareHeavyMedia({
+                    key: request.nativeStep
+                      ? `media-run:${request.nativeStep.runInformationId}`
+                      : key,
+                    scope,
+                    refs,
+                    model,
+                    sources: native.db.mediaSources,
+                    resources: options.mediaResources,
+                    ...(mediaOptions ? { options: mediaOptions } : {}),
+                  });
+                },
+                admitNativeDispatch: (id, step) =>
+                  native.db.nativeTools.admitModel(
+                    step.runInformationId,
+                    step.stepIndex,
+                    id,
+                    context.core.executionClaim,
+                  ),
+              }
+            : {}),
+        },
         approvals,
+        native
+          ? {
+              ...native,
+              options: options.nativeTools ?? { registrations: [], tasks: [] },
+            }
+          : undefined,
       ),
     });
   }
@@ -1404,6 +1927,8 @@ function createRegistry(
   for (const definition of [
     ...builtInInformationKinds,
     ...modelTaskInformationKinds,
+    ...nativeToolInformationKinds,
+    actionDecisionInformationKind,
     ...cadenceInformationKinds,
   ]) {
     registered.set(definition.kind, definition);
@@ -1442,6 +1967,8 @@ function collectDefinitions(
     [
       ...builtInInformationKinds,
       ...modelTaskInformationKinds,
+      ...nativeToolInformationKinds,
+      actionDecisionInformationKind,
       ...cadenceInformationKinds,
       ...oneShotInformationKinds,
       executionExhaustedInformationKind,
@@ -1504,6 +2031,9 @@ function safeFailedDeliveryPayload(receipt: PlatformDeliveryReceipt) {
     platform: receipt.platform,
     target: receipt.target,
     error: "Platform delivery failed",
+    ...(receipt.outcome === "rejected-before-effect"
+      ? {}
+      : { outcome: "unknown" as const }),
   };
 }
 
@@ -1512,6 +2042,7 @@ function safeRuntimeReceipt(
 ): PlatformDeliveryReceipt {
   return {
     ok: receipt.ok,
+    ...(receipt.outcome ? { outcome: receipt.outcome } : {}),
     adapterId: receipt.adapterId,
     platform: receipt.platform,
     target: receipt.target,

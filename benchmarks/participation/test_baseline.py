@@ -4,7 +4,8 @@
 Beta(1,1) 平滑、稀疏回退、history-only 拟合、未知窗口排除和概率单调；
 MetricTests 验证 AP ties、Brier、F1 阈值、单类别 null 与候选异常保留。
 代码库关系：调用 baseline.py 和 core.py；候选输入隔离测试修改候选副本，
-确认评分所用原始输入及标签不受影响。无外部服务、异步等待和持久化状态。
+确认评分所用原始输入及标签不受影响；复用的候选结果不能改写更早概率或跨目标污染。
+无外部服务、异步等待和持久化状态。
 """
 import copy
 import unittest
@@ -80,6 +81,40 @@ class BaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unique"):
             evaluate([item("same"), item("same")], [label("same", False, True)])
 
+    def test_reused_prediction_buffer_is_frozen_per_sample_and_not_misattributed(self):
+        inputs = [item("h"), item("d", "dev"), item("t", "test")]
+        inputs[-1]["targetUser"] = "b"
+        shared = {}
+
+        def candidate(request):
+            value = {"h": 0.1, "d": 0.2, "t": 0.9}[request["id"]]
+            shared.update({"30": value, "120": value})
+            return shared
+
+        summary, rows, _ = evaluate(inputs, [label(i["id"], False, True) for i in inputs], predict=candidate)
+        self.assertEqual([r["probabilities"]["30"] for r in rows], [0.1, 0.2, 0.9])
+        self.assertEqual([(r["id"], r["targetUser"], r["blockId"]) for r in rows],
+                         [(i["id"], i["targetUser"], i["blockId"]) for i in inputs])
+        shared["30"] = float("nan")
+        self.assertEqual(rows[0]["probabilities"], {"30": 0.1, "120": 0.1})
+        self.assertEqual(summary["policy"], {"policy": "provided-callback/v1", "fitSplit": None})
+
+    def test_invalid_reused_result_fails_only_the_current_sample(self):
+        inputs = [item("first", "test"), item("bad", "test"), item("last", "test")]
+        shared = {"30": 0.2, "120": 0.8}
+
+        def candidate(request):
+            shared["30"] = float("nan") if request["id"] == "bad" else 0.2
+            return shared
+
+        summary, rows, _ = evaluate(inputs, [label(i["id"], False, True) for i in inputs], predict=candidate)
+        self.assertEqual([r["status"] for r in rows], ["success", "failed", "success"])
+        self.assertEqual(rows[0]["probabilities"], {"30": 0.2, "120": 0.8})
+        self.assertEqual(rows[1]["errorType"], "ValueError")
+        self.assertIsNone(rows[1]["probabilities"])
+        group = next(g for g in summary["groups"] if g["split"] == "test" and g["windowSeconds"] == 30)
+        self.assertEqual((group["attempted"], group["failures"], group["knownLabelFailures"]), (3, 1, 1))
+
 
 class MetricTests(unittest.TestCase):
     def test_hand_calculated_ap_ties_brier_and_confusion_matrix(self):
@@ -130,7 +165,11 @@ class MetricTests(unittest.TestCase):
         self.assertIsNone(group["metrics"]["f1"])
         self.assertEqual(group["metrics"]["metricReason"], "prediction_failures")
         self.assertEqual(group["metrics"]["samples"], 2)
+        self.assertEqual(group["metrics"]["positives"], 1)
+        self.assertEqual(group["metrics"]["positiveRate"], 0.5)
         self.assertEqual(group["completedOnly"]["samples"], 1)
+        self.assertEqual(group["completedOnly"]["positives"], 0)
+        self.assertEqual(group["completedOnly"]["positiveRate"], 0)
         self.assertEqual(next(r for r in rows if r["id"] == "bad")["errorType"], "TimeoutError")
 
 

@@ -1,7 +1,17 @@
-/** One runtime module; durable collection, formation and publication have separate boundaries. */
-/** One runtime module; durable collection, formation and publication have separate boundaries. */
+/**
+ * 功能概述：运行独立 Memory 消费、形成、发布与恢复流程。
+ * 主要职责：按正规来源和当前有效身份绑定冻结 observation，使用持久请求选择模型协议；发布、终态、批次完成和观察确认分别幂等恢复。
+ * 代码库关系：通过 memory/observation/model capability 工作；定时维护扫描原账本，不依赖前台回复。
+ */
+import { memoryObservations, ackMemoryObservations } from "./observation.js";
+import { observationCapability } from "@kaguya/sdk";
 import { nativeMemorySnapshotSchema } from "@kaguya/schema";
-import { sourceSelector, sourceParticipants } from "./collection.js";
+import {
+  sourceSelector,
+  sourceParticipants,
+  currentSpeakerOwner,
+  recoveryFormationSelector,
+} from "./collection.js";
 import { stableId, publishFormation } from "./formation.js";
 import {
   defineInformationModule,
@@ -30,7 +40,9 @@ import {
   nativeMemoryCompleted,
   nativeMemoryRevision,
   nativeMemoryRetry,
-  formationOutputSchema,
+  nativeMemorySource,
+  nativeMemoryObservationCompleted,
+  formationSchemaFor,
 } from "./facts.js";
 import { createPromptTemplateRenderer } from "../../prompt-template.js";
 import { nativeMemoryTemplateDeclaration } from "../../prompt-declarations.js";
@@ -86,6 +98,7 @@ export function createNativeMemoryModule(
         payload: {
           batchId: batch.id,
           scope: batch.scope,
+          formationPolicy: "experience-operations.v1",
           sources: batch.sources.map((s) => ({ ...s })),
           existing,
         },
@@ -121,15 +134,18 @@ export function createNativeMemoryModule(
           : []),
       ],
       produces: [
+        nativeMemorySource,
+        nativeMemoryObservationCompleted,
         nativeMemoryRequested,
         nativeMemoryCompleted,
         nativeMemoryRevision,
         nativeMemoryRetry,
       ],
-      selectors: [sourceSelector],
+      selectors: [sourceSelector, recoveryFormationSelector],
       promptRenderers: [],
       promptTemplates: [nativeMemoryTemplateDeclaration],
       requires: [
+        observationCapability,
         nativeMemoryCapability,
         memoryFormationCapability,
         options.modelTaskCapability,
@@ -137,328 +153,414 @@ export function createNativeMemoryModule(
       ],
       provides: [],
     },
-    create: ({ activation }) => ({
-      provisions: [],
-      start(context) {
-        const run = () => {
-          void context.use(nativeMemoryCapability).index(context.signal);
-        };
-        run();
-        const timer = setInterval(run, 60_000);
-        timer.unref();
-        context.signal.addEventListener("abort", () => clearInterval(timer), {
-          once: true,
-        });
-      },
-      subscriptions: [
-        onInformation(
-          nativeMemoryRetry,
-          { subscriptionId: "memory.native.retry", delivery: "durable" },
-          async (atom, context) => {
-            const batch = await context
-              .use(memoryFormationCapability)
-              .claim(atom.payload.scope, true);
-            if (batch) await request(batch, context);
-          },
-        ),
-        ...(options.deliveryDeliveredInformationKind
-          ? [
-              onInformation(
-                options.deliveryDeliveredInformationKind,
-                {
-                  subscriptionId: "memory.native.delivered",
-                  delivery: "durable",
-                },
-                async (atom, context) => {
-                  if (atom.payload.ok !== true) return;
-                  const source = (await context.select(sourceSelector)).find(
-                    (a) => a.kind === deliveryRequestedInformationKind.kind,
-                  );
-                  if (!source) return;
-                  const p =
-                    deliveryRequestedInformationKind.payloadSchema.parse(
-                      source.payload,
+    create: ({ activation }) => {
+      let maintenance = Promise.resolve();
+      return {
+        provisions: [],
+        ready: async (context) => {
+          await context.use(memoryFormationCapability).recover?.();
+        },
+        stop: async () => {
+          await maintenance;
+        },
+        start(context) {
+          const run = () => {
+            void context.use(nativeMemoryCapability).index(context.signal);
+          };
+          run();
+          const timer = setInterval(() => {
+            run();
+            maintenance = maintenance
+              .then(() =>
+                context.signal.aborted
+                  ? undefined
+                  : context.use(memoryFormationCapability).recover?.(),
+              )
+              .catch(() => {});
+          }, 60_000);
+          timer.unref();
+          context.signal.addEventListener("abort", () => clearInterval(timer), {
+            once: true,
+          });
+        },
+        subscriptions: [
+          onInformation(
+            nativeMemoryRetry,
+            { subscriptionId: "memory.native.retry", delivery: "durable" },
+            async (atom, context) => {
+              const saved = await context.select(recoveryFormationSelector);
+              const requested = saved.find(
+                (a) => a.kind === nativeMemoryRequested.kind,
+              );
+              const terminal = saved.find(
+                (a) => a.kind === nativeMemoryCompleted.kind,
+              );
+              if (requested && terminal?.payload.status === "completed") {
+                await context
+                  .use(memoryFormationCapability)
+                  .finish(String(terminal.payload.batchId), "completed");
+                const pages = await memoryObservations(requested, context);
+                await ackMemoryObservations(pages, terminal, context);
+                return;
+              }
+              if (
+                terminal &&
+                ["rejected", "failed"].includes(String(terminal.payload.status))
+              ) {
+                const successor = await context
+                  .use(memoryFormationCapability)
+                  .successor?.(String(atom.payload.batchId));
+                if (successor) {
+                  await request(successor, context);
+                  return;
+                }
+              }
+              const batch = await context
+                .use(memoryFormationCapability)
+                .claim(atom.payload.scope, true);
+              if (batch) await request(batch, context);
+            },
+          ),
+          ...(options.deliveryDeliveredInformationKind
+            ? [
+                onInformation(
+                  options.deliveryDeliveredInformationKind,
+                  {
+                    subscriptionId: "memory.native.delivered",
+                    delivery: "durable",
+                  },
+                  async (atom, context) => {
+                    if (atom.payload.ok !== true) return;
+                    const source = (await context.select(sourceSelector)).find(
+                      (a) => a.kind === deliveryRequestedInformationKind.kind,
                     );
-                  if (!("text" in p.message) || !p.message.text.trim()) return;
-                  const scope = memoryScope(p);
-                  const formation = context.use(memoryFormationCapability);
-                  if (
-                    !(await formation.ingest({
-                      id: atom.informationId,
+                    if (!source) return;
+                    const p =
+                      deliveryRequestedInformationKind.payloadSchema.parse(
+                        source.payload,
+                      );
+                    if (!("text" in p.message) || !p.message.text.trim())
+                      return;
+                    const scope = memoryScope(p);
+                    const formation = context.use(memoryFormationCapability);
+                    if (
+                      !(await formation.ingest({
+                        id: atom.informationId,
+                        scope,
+                        ownerId: "self:kaguya",
+                        sourceType: "delivered",
+                        participants: [],
+                        replyTo: null,
+                        text: `自身已经发出的消息（不代表已完成其中承诺的行动）：${p.message.text}`,
+                        occurredAt: atom.occurredAt,
+                        collectedAt: context.now().toISOString(),
+                      }))
+                    )
+                      return;
+                    await context.use(oneShotScheduleCapability).schedule({
+                      operationKey: `memory.native.flush:${atom.informationId}`,
+                      sourceInformationId: atom.informationId,
+                      dueAt: new Date(
+                        context.now().getTime() + 60_000,
+                      ).toISOString(),
+                      input: { scope, consumer: "memory.native" },
+                      activation,
+                    });
+                    const batch = await formation.claim(
                       scope,
-                      ownerId: "self:kaguya",
-                      sourceType: "delivered",
-                      participants: [],
-                      replyTo: null,
-                      text: `自身已经发出的消息（不代表已完成其中承诺的行动）：${p.message.text}`,
-                      occurredAt: atom.occurredAt,
-                      collectedAt: context.now().toISOString(),
-                    }))
-                  )
-                    return;
-                  await context.use(oneShotScheduleCapability).schedule({
-                    operationKey: `memory.native.flush:${atom.informationId}`,
-                    sourceInformationId: atom.informationId,
-                    dueAt: new Date(
-                      context.now().getTime() + 60_000,
-                    ).toISOString(),
-                    input: { scope, consumer: "memory.native" },
-                    activation,
-                  });
-                  const batch = await formation.claim(
-                    scope,
-                    false,
-                    context.now().toISOString(),
-                  );
-                  if (batch) await request(batch, context);
-                },
-              ),
-            ]
-          : []),
-        onInformation(
-          qqMeaning,
-          { subscriptionId: "memory.native.qq-meaning", delivery: "durable" },
-          async (atom, context) => {
-            const p = qqMeaning.payloadSchema.parse(atom.payload);
-            const sources = await context.select(sourceSelector);
-            const source = sources.find(
-              (a) => a.kind === inboundTextInformationKind.kind,
-            );
-            if (!source || !p.evidenceIds.length) return;
-            const raw = inboundTextInformationKind.payloadSchema.parse(
-              source.payload,
-            );
-            const scope = memoryScope(raw.source);
-            const id = stableId("qq-asset", p.assetInformationId);
-            const access = context.use(nativeMemoryCapability);
-            if (await access.published(`qq-meaning:${atom.informationId}`))
-              return;
-            const snapshot = await access.prepare({
-              scope,
-              owners: ["expression:kaguya"],
-              query: "",
-              asOf: context.now().toISOString(),
-            });
-            const previous =
-              snapshot.fixed.find((node) => node.id === id) ??
-              snapshot.recalled.find((r) => r.node.id === id)?.node;
-            if (previous?.metadata.locked) return;
-            await access.publish({
-              operationId: `qq-meaning:${atom.informationId}`,
-              actor: "automatic",
-              nodes: [
-                {
-                  expectedRevision: previous?.metadata.revision ?? 0,
-                  node: {
-                    id,
-                    content: `文字上下文推断：${p.meaning || "含义未知"}。用法：${p.usage || "未知"}`,
-                    metadata: {
-                      system: "native-v1",
-                      kind: "expression",
-                      ownerId: "expression:kaguya",
-                      scope,
-                      level: 1,
-                      revision: (previous?.metadata.revision ?? 0) + 1,
-                      status: "active",
-                      locked: false,
-                      sourceIds: p.evidenceIds,
-                      aliases: [],
-                      tags: ["QQ表情"],
-                      occurredAt: atom.occurredAt,
-                      qqAssetId: p.assetInformationId,
-                      expressionType: "qq-resource",
-                      confidence: p.confidence,
-                      basis: "context-inference",
+                      false,
+                      context.now().toISOString(),
+                    );
+                    if (batch) await request(batch, context);
+                  },
+                ),
+              ]
+            : []),
+          onInformation(
+            qqMeaning,
+            { subscriptionId: "memory.native.qq-meaning", delivery: "durable" },
+            async (atom, context) => {
+              const p = qqMeaning.payloadSchema.parse(atom.payload);
+              const sources = await context.select(sourceSelector);
+              const source = sources.find(
+                (a) => a.kind === inboundTextInformationKind.kind,
+              );
+              if (!source || !p.evidenceIds.length) return;
+              const raw = inboundTextInformationKind.payloadSchema.parse(
+                source.payload,
+              );
+              const scope = memoryScope(raw.source);
+              const id = stableId("qq-asset", p.assetInformationId);
+              const access = context.use(nativeMemoryCapability);
+              if (await access.published(`qq-meaning:${atom.informationId}`))
+                return;
+              const snapshot = await access.prepare({
+                scope,
+                owners: ["expression:kaguya"],
+                query: "",
+                asOf: context.now().toISOString(),
+              });
+              const previous =
+                snapshot.fixed.find((node) => node.id === id) ??
+                snapshot.recalled.find((r) => r.node.id === id)?.node;
+              if (previous?.metadata.locked) return;
+              await access.publish({
+                operationId: `qq-meaning:${atom.informationId}`,
+                actor: "automatic",
+                nodes: [
+                  {
+                    expectedRevision: previous?.metadata.revision ?? 0,
+                    node: {
+                      id,
+                      content: `文字上下文推断：${p.meaning || "含义未知"}。用法：${p.usage || "未知"}`,
+                      metadata: {
+                        system: "native-v1",
+                        kind: "expression",
+                        ownerId: "expression:kaguya",
+                        scope,
+                        level: 1,
+                        revision: (previous?.metadata.revision ?? 0) + 1,
+                        status: "active",
+                        locked: false,
+                        sourceIds: p.evidenceIds,
+                        aliases: [],
+                        tags: ["QQ表情"],
+                        occurredAt: atom.occurredAt,
+                        qqAssetId: p.assetInformationId,
+                        expressionType: "qq-resource",
+                        confidence: p.confidence,
+                        basis: "context-inference",
+                      },
                     },
                   },
-                },
-              ],
-            });
-          },
-        ),
-        onInformation(
-          nativeMemoryRevision,
-          { subscriptionId: "memory.native.index", delivery: "durable" },
-          async (_atom, context) => {
-            await context.use(nativeMemoryCapability).index(context.signal);
-          },
-        ),
-        onInformation(
-          personContextCompletedInformationKind,
-          { subscriptionId: "memory.native.collect", delivery: "durable" },
-          async (atom, context) => {
-            const p = atom.payload;
-            if (
-              !["complete", "unresolved"].includes(String(p.status)) ||
-              p.scopeMode !== "canonical"
-            )
-              return;
-            const source = (await context.select(sourceSelector)).find(
-              (a) => a.kind === inboundTextInformationKind.kind,
-            );
-            if (
-              !source ||
-              typeof source.payload.text !== "string" ||
-              !source.payload.text.trim()
-            )
-              return;
-            const parsed = inboundTextInformationKind.payloadSchema.parse(
-              source.payload,
-            );
-            if (
-              parsed.source.sender?.isSelf ||
-              (parsed.source.senderId !== undefined &&
-                parsed.source.senderId === parsed.source.selfId)
-            )
-              return;
-            const scope = memoryScope(parsed.source);
-            const formation = context.use(memoryFormationCapability);
-            const accepted = await formation.ingest({
-              id: source.informationId,
-              scope,
-              ownerId: p.personInformationId
-                ? `person:${p.personInformationId}`
-                : `conversation:${scope}`,
-              sourceType: "inbound",
-              participants: await sourceParticipants(
-                parsed.source,
-                p.personInformationId
-                  ? `person:${p.personInformationId}`
-                  : null,
-                context.use(nativeMemoryCapability),
-              ),
-              replyTo: parsed.source.replyTo
-                ? {
-                    platformMessageId: parsed.source.replyTo.platformMessageId,
-                    senderId: parsed.source.replyTo.senderId ?? null,
-                  }
-                : null,
-              text: parsed.text,
-              occurredAt: source.occurredAt,
-              collectedAt: context.now().toISOString(),
-            });
-            if (!accepted) return;
-            await context.use(oneShotScheduleCapability).schedule({
-              operationKey: `memory.native.flush:${source.informationId}`,
-              sourceInformationId: atom.informationId,
-              dueAt: new Date(context.now().getTime() + 60_000).toISOString(),
-              input: { scope, consumer: "memory.native" },
-              activation,
-            });
-            const batch = await formation.claim(
-              scope,
-              false,
-              context.now().toISOString(),
-            );
-            if (batch) await request(batch, context);
-          },
-        ),
-        onInformation(
-          oneShotDueInformationKind,
-          { subscriptionId: "memory.native.flush", delivery: "durable" },
-          async (atom, context) => {
-            const selected = await context.select(sourceSelector);
-            const schedule = selected.find(
-              (a) => a.kind === "core.schedule.one-shot.requested",
-            );
-            const input = schedule?.payload.input as
-              { scope?: string; consumer?: string } | undefined;
-            if (input?.consumer !== "memory.native" || !input.scope) return;
-            const runtime = selected.find(
-              (a) => a.kind === "core.runtime.context",
-            );
-            if (!runtime) throw new Error("memory_flush_context_missing");
-            const batch = await context
-              .use(memoryFormationCapability)
-              .claim(input.scope, true, context.now().toISOString());
-            if (batch) await request(batch, context, runtime.informationId);
-            await context.use(oneShotScheduleCapability).finish({
-              scheduleInformationId: atom.payload.scheduleInformationId,
-              status: "fired",
-            });
-          },
-        ),
-        onInformation(
-          nativeMemoryRequested,
-          {
-            // Memory uses one permanent v1 event kind and stable subscription identity.
-            subscriptionId: "memory.native.form",
-            delivery: "durable",
-            retryForever: true,
-            retryDelayMs: 5000,
-          },
-          async (atom, context) => {
-            const payload = nativeMemoryRequested.payloadSchema.parse(
-              atom.payload,
-            );
-            const p = {
-              ...payload,
-              existing: nativeMemorySnapshotSchema.parse(payload.existing),
-            };
-            const sources = await context.select(sourceSelector);
-            const result = await context
-              .use(options.modelTaskCapability)
-              .execute({
-                task: {
-                  taskId: "memory.native.form",
-                  outputMode: "object",
-                  outputSchema: formationOutputSchema,
-                  allowedTiers: ["light"],
-                },
-                sourceInformationId: atom.informationId,
-                contextInformationId: atom.references.find(
-                  (r) => r.relation === "core:context",
-                )!.informationId,
-                activation,
-                selectionPolicy: { tier: "light" },
-                contextAtoms: [atom, ...sources],
-                prompt: render([
-                  {
-                    name: "context",
-                    content: JSON.stringify(p),
-                    informationIds: [
-                      atom.informationId,
-                      ...sources.map((s) => s.informationId),
-                    ],
-                  },
-                ]),
-              });
-            const { status, reason, nodeIds } = await publishFormation(
-              p,
-              result,
-              atom.occurredAt,
-              context.use(nativeMemoryCapability),
-            );
-            await context.commitTerminal(
-              "memory.native.formation",
-              atom.informationId,
-              nativeMemoryCompleted,
-              {
-                payload: {
-                  batchId: p.batchId,
-                  scope: p.scope,
-                  status,
-                  nodeIds,
-                  reason,
-                },
-                references: [
-                  {
-                    relation: "core:status-of",
-                    informationId: atom.informationId,
-                  },
                 ],
-              },
-            );
-            await context
-              .use(memoryFormationCapability)
-              .finish(p.batchId, status);
-            const next = await context
-              .use(memoryFormationCapability)
-              .claim(p.scope, false, context.now().toISOString());
-            if (next) await request(next, context);
-          },
-        ),
-      ],
-    }),
+              });
+            },
+          ),
+          onInformation(
+            nativeMemoryRevision,
+            { subscriptionId: "memory.native.index", delivery: "durable" },
+            async (_atom, context) => {
+              await context.use(nativeMemoryCapability).index(context.signal);
+            },
+          ),
+          onInformation(
+            personContextCompletedInformationKind,
+            { subscriptionId: "memory.native.collect", delivery: "durable" },
+            async (atom, context) => {
+              const p = atom.payload;
+              if (
+                !["complete", "unresolved"].includes(String(p.status)) ||
+                p.scopeMode !== "canonical"
+              )
+                return;
+              const source = (await context.select(sourceSelector)).find(
+                (a) => a.kind === inboundTextInformationKind.kind,
+              );
+              if (
+                !source ||
+                typeof source.payload.text !== "string" ||
+                !source.payload.text.trim()
+              )
+                return;
+              const parsed = inboundTextInformationKind.payloadSchema.parse(
+                source.payload,
+              );
+              if (
+                parsed.source.sender?.isSelf ||
+                (parsed.source.senderId !== undefined &&
+                  parsed.source.senderId === parsed.source.selfId)
+              )
+                return;
+              const scope = memoryScope(parsed.source);
+              const formation = context.use(memoryFormationCapability);
+              const speakerOwnerId = await currentSpeakerOwner(
+                parsed.source,
+                p,
+                context.use(nativeMemoryCapability),
+              );
+              const accepted = await formation.ingest({
+                id: source.informationId,
+                scope,
+                ownerId: speakerOwnerId ?? `conversation:${scope}`,
+                sourceType: "inbound",
+                participants: await sourceParticipants(
+                  parsed.source,
+                  speakerOwnerId,
+                  context.use(nativeMemoryCapability),
+                ),
+                replyTo: parsed.source.replyTo
+                  ? {
+                      platformMessageId:
+                        parsed.source.replyTo.platformMessageId,
+                      senderId: parsed.source.replyTo.senderId ?? null,
+                    }
+                  : null,
+                text: parsed.text,
+                occurredAt: source.occurredAt,
+                collectedAt: context.now().toISOString(),
+              });
+              if (!accepted) return;
+              await context.use(oneShotScheduleCapability).schedule({
+                operationKey: `memory.native.flush:${source.informationId}`,
+                sourceInformationId: atom.informationId,
+                dueAt: new Date(context.now().getTime() + 60_000).toISOString(),
+                input: { scope, consumer: "memory.native" },
+                activation,
+              });
+              const batch = await formation.claim(
+                scope,
+                false,
+                context.now().toISOString(),
+              );
+              if (batch) await request(batch, context);
+            },
+          ),
+          onInformation(
+            oneShotDueInformationKind,
+            { subscriptionId: "memory.native.flush", delivery: "durable" },
+            async (atom, context) => {
+              const selected = await context.select(sourceSelector);
+              const schedule = selected.find(
+                (a) => a.kind === "core.schedule.one-shot.requested",
+              );
+              const input = schedule?.payload.input as
+                { scope?: string; consumer?: string } | undefined;
+              if (input?.consumer !== "memory.native" || !input.scope) return;
+              const runtime = selected.find(
+                (a) => a.kind === "core.runtime.context",
+              );
+              if (!runtime) throw new Error("memory_flush_context_missing");
+              const batch = await context
+                .use(memoryFormationCapability)
+                .claim(input.scope, true, context.now().toISOString());
+              if (batch) await request(batch, context, runtime.informationId);
+              await context.use(oneShotScheduleCapability).finish({
+                scheduleInformationId: atom.payload.scheduleInformationId,
+                status: "fired",
+              });
+            },
+          ),
+          onInformation(
+            nativeMemoryRequested,
+            {
+              // Memory uses one permanent v1 event kind and stable subscription identity.
+              subscriptionId: "memory.native.form",
+              delivery: "durable",
+              retryForever: true,
+              retryDelayMs: 5000,
+            },
+            async (atom, context) => {
+              const payload = nativeMemoryRequested.payloadSchema.parse(
+                atom.payload,
+              );
+              const p = {
+                ...payload,
+                existing: nativeMemorySnapshotSchema.parse(payload.existing),
+              };
+              const pages = await memoryObservations(atom, context);
+              const sources = await context.select(sourceSelector);
+              const saved = await context
+                .use(nativeMemoryCapability)
+                .published(p.batchId);
+              const result = saved
+                ? { status: "completed", output: undefined }
+                : await context.use(options.modelTaskCapability).execute({
+                    task: {
+                      taskId: "memory.native.form",
+                      outputMode: "object",
+                      outputSchema: formationSchemaFor(
+                        p.existing,
+                        p.formationPolicy,
+                      ),
+                      allowedTiers: ["light"],
+                    },
+                    sourceInformationId: atom.informationId,
+                    contextInformationId: atom.references.find(
+                      (r) => r.relation === "core:context",
+                    )!.informationId,
+                    activation,
+                    selectionPolicy: { tier: "light" },
+                    contextAtoms: [atom, ...sources],
+                    prompt: render([
+                      {
+                        name: "context",
+                        content: JSON.stringify({
+                          ...p,
+                          ...(p.formationPolicy
+                            ? {
+                                formationRules: {
+                                  policy: p.formationPolicy,
+                                  instructions:
+                                    "批次仅为读取窗口。延续同一经历时使用已有节点ID作为key。证据不足时保持不变，不把旁观者内容归给被提问者。封口、重开、更正用experienceOperation且inputIds和outputIds为同一已有ID。合并/拆分用旧ID作为inputIds、新key作为outputIds，nodes同时包含归档输入及active输出。输出明确分配原输入全部来源，不编造归属。每批至多一次经历操作；其他节点可普通增补。空结果或完全无变化确认本批读取。",
+                                },
+                              }
+                            : {}),
+                        }),
+                        informationIds: [
+                          atom.informationId,
+                          ...sources.map((s) => s.informationId),
+                        ],
+                      },
+                    ]),
+                  });
+              const { status, reason, nodeIds } = saved
+                ? {
+                    status: "completed" as const,
+                    reason: "published",
+                    nodeIds: saved.map((n) => n.id),
+                  }
+                : await publishFormation(
+                    p,
+                    result,
+                    atom.occurredAt,
+                    context.use(nativeMemoryCapability),
+                  );
+              const terminal = await context.commitTerminal(
+                "memory.native.formation",
+                atom.informationId,
+                nativeMemoryCompleted,
+                {
+                  payload: {
+                    batchId: p.batchId,
+                    scope: p.scope,
+                    status,
+                    nodeIds,
+                    reason,
+                  },
+                  references: [
+                    {
+                      relation: "core:status-of",
+                      informationId: atom.informationId,
+                    },
+                  ],
+                },
+              );
+              await context
+                .use(memoryFormationCapability)
+                .finish(
+                  p.batchId,
+                  String(terminal.payload.status) as
+                    "completed" | "rejected" | "failed",
+                );
+              await ackMemoryObservations(pages, terminal, context);
+              if (
+                terminal.payload.reason === "memory_revision_conflict" ||
+                terminal.payload.reason === "memory_summary_conflict"
+              ) {
+                const successor = await context
+                  .use(memoryFormationCapability)
+                  .successor?.(p.batchId);
+                if (successor) await request(successor, context);
+              }
+              const next = await context
+                .use(memoryFormationCapability)
+                .claim(p.scope, false, context.now().toISOString());
+              if (next) await request(next, context);
+            },
+          ),
+        ],
+      };
+    },
   });
 }

@@ -1,0 +1,253 @@
+[
+  {
+    "protocol": "kaguya-reply-rhythm/v1",
+    "id": "direct-question",
+    "dataKind": "synthetic",
+    "provenance": {
+      "selectionNote": "人工编写的虚构诊断案例，未取自私人聊天。"
+    },
+    "input": {
+      "persona": "温和自然，根据当前问题回答。",
+      "cutoff": "2026-09-09T00:00:03.000Z",
+      "messages": [
+        {
+          "id": "m-context",
+          "sender": "person-context",
+          "receivedAt": "2026-09-09T00:00:00.000Z",
+          "text": "活动通知：三点开始。",
+          "mediaTypes": [],
+          "replyTo": null
+        },
+        {
+          "id": "m-1",
+          "sender": "person-1",
+          "receivedAt": "2026-09-09T00:00:01.000Z",
+          "text": "活动几点开始？",
+          "mediaTypes": [],
+          "replyTo": null
+        }
+      ],
+      "turnMessageIds": ["m-1"]
+    },
+    "reference": {
+      "kind": "synthetic-reference",
+      "association": "manual",
+      "rationale": "作者明确将参考回复关联到最后一条输入；不是由问号或相邻位置自动推断。",
+      "replyToInputIds": ["m-1"],
+      "text": "三点。"
+    },
+    "requiredAnswers": [
+      {
+        "id": "start-time",
+        "inputId": "m-1",
+        "description": "明确给出活动开始时间"
+      }
+    ]
+  },
+  {
+    "protocol": "kaguya-reply-rhythm/v1",
+    "id": "joke",
+    "dataKind": "synthetic",
+    "provenance": {
+      "selectionNote": "人工编写的虚构诊断案例，未取自私人聊天。"
+    },
+    "input": {
+      "persona": "温和自然，根据当前问题回答。",
+      "cutoff": "2026-09-09T00:00:03.000Z",
+      "messages": [
+        {
+          "id": "m-1",
+          "sender": "person-1",
+          "receivedAt": "2026-09-09T00:00:01.000Z",
+          "text": "又是和闹钟斗智斗勇的一天。",
+          "mediaTypes": [],
+          "replyTo": null
+        }
+      ],
+      "turnMessageIds": ["m-1"]
+    },
+    "reference": {
+      "kind": "synthetic-reference",
+      "association": "manual",
+      "rationale": "作者明确将参考回复关联到最后一条输入；不是由问号或相邻位置自动推断。",
+      "replyToInputIds": ["m-1"],
+      "text": "闹钟今天也尽力了。"
+    },
+    "requiredAnswers": []
+  },
+  {
+    "protocol": "kaguya-reply-rhythm/v1",
+    "id": "complaint",
+    "dataKind": "synthetic",
+    "provenance": {
+      "selectionNote": "人工编写的虚构诊断案例，未取自私人聊天。"
+    },
+    "input": {
+      "persona": "温和自然，根据当前问题回答。",
+      "cutoff": "2026-09-09T00:00:03.000Z",
+      "messages": [
+        {
+          "id": "m-1",
+          "sender": "person-1",
+          "receivedAt": "2026-09-09T00:00:01.000Z",
+          "text": "今天排了好久的队，累死。",
+          "mediaTypes": [],
+          "replyTo": null
+        }
+      ],
+      "turnMessageIds": ["m-1"]
+    },
+    "reference": {
+      "kind": "synthetic-reference",
+      "association": "manual",
+      "rationale": "作者明确将参考回复关联到最后一条输入；不是由问号或相邻位置自动推断。",
+      "replyToInputIds": ["m-1"],
+      "text": "辛苦了。"
+    },
+    "requiredAnswers": []
+  },
+  {
+    "protocol": "kaguya-reply-rhythm/v1",
+    "id": "followup",
+    "dataKind": "synthetic",
+    "provenance": {
+      "selectionNote": "人工编写的虚构诊断案例，未取自私人聊天。"
+    },
+    "input": {
+      "persona": "温和自然，根据当前问题回答。",
+      "cutoff": "2026-09-09T00:00:03.000Z",
+      "messages": [
+        {
+          "id": "m-context",
+          "sender": "person-context",
+          "receivedAt": "2026-09-09T00:00:00.000Z",
+          "text": "活动通知：东门集合，三点开始。",
+          "mediaTypes": [],
+          "replyTo": null
+        },
+        {
+          "id": "m-1",
+          "sender": "person-1",
+          "receivedAt": "2026-09-09T00:00:01.000Z",
+          "text": "活动三点开始。",
+          "mediaTypes": [],
+          "replyTo": null
+        },
+        {
+          "id": "m-2",
+          "sender": "person-2",
+          "receivedAt": "2026-09-09T00:00:02.000Z",
+          "text": "那在哪集合？",
+          "mediaTypes": [],
+          "replyTo": "m-1"
+        }
+      ],
+      "turnMessageIds": ["m-2"]
+    },
+    "reference": {
+      "kind": "synthetic-reference",
+      "association": "manual",
+      "rationale": "作者明确将参考回复关联到最后一条输入；不是由问号或相邻位置自动推断。",
+      "replyToInputIds": ["m-2"],
+      "text": "东门。"
+    },
+    "requiredAnswers": [
+      {
+        "id": "meeting-point",
+        "inputId": "m-2",
+        "description": "回答集合地点"
+      }
+    ]
+  },
+  {
+    "protocol": "kaguya-reply-rhythm/v1",
+    "id": "multiple-topics",
+    "dataKind": "synthetic",
+    "provenance": {
+      "selectionNote": "人工编写的虚构诊断案例，未取自私人聊天。"
+    },
+    "input": {
+      "persona": "温和自然，根据当前问题回答。",
+      "cutoff": "2026-09-09T00:00:03.000Z",
+      "messages": [
+        {
+          "id": "m-context",
+          "sender": "person-context",
+          "receivedAt": "2026-09-09T00:00:00.000Z",
+          "text": "课程公告：作业交到课程网站。",
+          "mediaTypes": [],
+          "replyTo": null
+        },
+        {
+          "id": "m-1",
+          "sender": "person-1",
+          "receivedAt": "2026-09-09T00:00:01.000Z",
+          "text": "作业周五交，晚上还要赶车。",
+          "mediaTypes": [],
+          "replyTo": null
+        },
+        {
+          "id": "m-2",
+          "sender": "person-2",
+          "receivedAt": "2026-09-09T00:00:02.000Z",
+          "text": "提交到哪里？另外这周真忙。",
+          "mediaTypes": [],
+          "replyTo": "m-1"
+        }
+      ],
+      "turnMessageIds": ["m-2"]
+    },
+    "reference": {
+      "kind": "synthetic-reference",
+      "association": "manual",
+      "rationale": "作者明确将参考回复关联到最后一条输入；不是由问号或相邻位置自动推断。",
+      "replyToInputIds": ["m-2"],
+      "text": "交到课程网站。"
+    },
+    "requiredAnswers": [
+      {
+        "id": "submit-location",
+        "inputId": "m-2",
+        "description": "回答提交位置；无需替对方规划行程"
+      }
+    ]
+  },
+  {
+    "protocol": "kaguya-reply-rhythm/v1",
+    "id": "missing-media",
+    "dataKind": "synthetic",
+    "provenance": {
+      "selectionNote": "人工编写的虚构诊断案例，未取自私人聊天。"
+    },
+    "input": {
+      "persona": "温和自然，根据当前问题回答。",
+      "cutoff": "2026-09-09T00:00:03.000Z",
+      "messages": [
+        {
+          "id": "m-1",
+          "sender": "person-1",
+          "receivedAt": "2026-09-09T00:00:01.000Z",
+          "text": "这张图里的入口在哪里？",
+          "mediaTypes": ["image"],
+          "replyTo": null,
+          "mediaContent": "missing"
+        }
+      ],
+      "turnMessageIds": ["m-1"]
+    },
+    "reference": {
+      "kind": "synthetic-reference",
+      "association": "manual",
+      "rationale": "作者明确将参考回复关联到最后一条输入；不是由问号或相邻位置自动推断。",
+      "replyToInputIds": ["m-1"],
+      "text": "我这边没看到图片内容。"
+    },
+    "requiredAnswers": [
+      {
+        "id": "missing-image",
+        "inputId": "m-1",
+        "description": "说明缺少图片内容；不猜测图中入口"
+      }
+    ]
+  }
+]

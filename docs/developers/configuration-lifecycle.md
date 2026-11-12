@@ -9,6 +9,8 @@ description: Server 启动时如何加载 Profile、创建 Runtime，并处理�
 
 当前格式的支持范围与配置测试归属见[测试与兼容边界](./testing-compatibility)。
 
+完整配置改为重启生效的推荐范围、失败恢复和后续实施切片见[配置重启生效决策（规划中）](../design/configuration-restart-decision)。该方案尚未启用，本文继续描述现行热应用行为。
+
 ## 启动阶段
 
 ```mermaid

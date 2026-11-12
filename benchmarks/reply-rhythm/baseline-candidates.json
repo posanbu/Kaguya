@@ -1,0 +1,98 @@
+[
+  {
+    "id": "direct-question-short",
+    "caseId": "direct-question",
+    "variant": "authored-short",
+    "status": "ok",
+    "text": "三点。",
+    "inputSha256": "b801fcf23d1b214176b031461f7d748bd4a3e37f7810d3c134504921be8dff9a"
+  },
+  {
+    "id": "direct-question-overfull",
+    "caseId": "direct-question",
+    "variant": "authored-overfull",
+    "status": "ok",
+    "text": "三点。你准备怎么去？建议提前半小时到。",
+    "inputSha256": "b801fcf23d1b214176b031461f7d748bd4a3e37f7810d3c134504921be8dff9a"
+  },
+  {
+    "id": "joke-short",
+    "caseId": "joke",
+    "variant": "authored-short",
+    "status": "ok",
+    "text": "闹钟今天也尽力了。",
+    "inputSha256": "bfff7dd672d9200b7fa6ce88baabaa98790c8c7ae04e72e2332c7580f695522c"
+  },
+  {
+    "id": "joke-overfull",
+    "caseId": "joke",
+    "variant": "authored-overfull",
+    "status": "ok",
+    "text": "闹钟今天也尽力了。要不要试试换个铃声？可以把手机放远一点。",
+    "inputSha256": "bfff7dd672d9200b7fa6ce88baabaa98790c8c7ae04e72e2332c7580f695522c"
+  },
+  {
+    "id": "complaint-short",
+    "caseId": "complaint",
+    "variant": "authored-short",
+    "status": "ok",
+    "text": "辛苦了。",
+    "inputSha256": "f218a32f01e762a08b1ee6763e7b42d43d7802f1ce6842a3323bab13cc8e9b80"
+  },
+  {
+    "id": "complaint-overfull",
+    "caseId": "complaint",
+    "variant": "authored-overfull",
+    "status": "ok",
+    "text": "辛苦了。下次早点去吧，再带点吃的。你现在到家了吗？",
+    "inputSha256": "f218a32f01e762a08b1ee6763e7b42d43d7802f1ce6842a3323bab13cc8e9b80"
+  },
+  {
+    "id": "followup-short",
+    "caseId": "followup",
+    "variant": "authored-short",
+    "status": "ok",
+    "text": "东门。",
+    "inputSha256": "4544acc117144120f17ffa367bfc8262951f05eb7983ba3f7221e7b737e3b268"
+  },
+  {
+    "id": "followup-overfull",
+    "caseId": "followup",
+    "variant": "authored-overfull",
+    "status": "ok",
+    "text": "三点开始哦。顺便想想结束后去哪吃饭。",
+    "inputSha256": "4544acc117144120f17ffa367bfc8262951f05eb7983ba3f7221e7b737e3b268"
+  },
+  {
+    "id": "multiple-topics-short",
+    "caseId": "multiple-topics",
+    "variant": "authored-short",
+    "status": "ok",
+    "text": "交到课程网站。",
+    "inputSha256": "810b8bcaf98493472f34f3e4331c97de8e7dcb63a7df579c2cdf75c4a8857174"
+  },
+  {
+    "id": "multiple-topics-overfull",
+    "caseId": "multiple-topics",
+    "variant": "authored-overfull",
+    "status": "ok",
+    "text": "听起来很忙，注意休息。下次可以提前列个计划。",
+    "inputSha256": "810b8bcaf98493472f34f3e4331c97de8e7dcb63a7df579c2cdf75c4a8857174"
+  },
+  {
+    "id": "missing-media-short",
+    "caseId": "missing-media",
+    "variant": "authored-short",
+    "status": "ok",
+    "text": "我这边没看到图片内容。",
+    "inputSha256": "3500e42bfa5b32ec647ff2c68002bb2cdb653adb962cd3f630f155955ee303ac"
+  },
+  {
+    "id": "missing-media-overfull",
+    "caseId": "missing-media",
+    "variant": "authored-overfull",
+    "status": "ok",
+    "text": "入口在左边。你要不要先规划路线？",
+    "inputSha256": "3500e42bfa5b32ec647ff2c68002bb2cdb653adb962cd3f630f155955ee303ac"
+  }
+]

@@ -70,6 +70,8 @@
 
 当前已有 Web 与 NapCat 接入；服务与模块实例由 `cordis.yml` 中的 Cordis 插件树装配；独立模块包可自行声明设置、版本化 Kind 和处理器，经显式配置应用完成装载或卸载，历史 Atom 与 Kind 元数据持续保留。上述语音和硬件场景说明扩展方向，具体设备仍需实现适配器。开发入口见[信息模块开发](docs/developers/information-modules.md)。
 
+Linux 工具环境提供专用 rootless Podman broker、持久操作日志与 Runtime provider 接口，安装步骤见 [Linux 环境说明](scripts/linux-environments/README.md)。完整浏览器与 GUI 镜像由对应适配器继续交付和验收。
+
 ### Memory 塑造人设：让个性有来历，也能变化
 
 我们的设计目标是**让所有人设都通过 Memory 表达和演化**：她如何认识自己、喜欢什么、与谁有怎样的关系，都能关联到背景经历与相处过程。原始信息可以逐条保存为证据，人物认识、关系、自我和表达习惯等派生结果则应根据职责读取完整情境或证据集合，而不是把触发模块的单条信息直接当成全部经历。生成回复时，再根据当前情境取用相关记忆，让个性落实到具体的选择和表达中。
@@ -141,7 +143,7 @@ pnpm dev
 - **社区交流**：加入 [Discord 群组](https://discord.gg/PwvtanURJV)，交流使用体验、分享想法并讨论开发。
 - **问题与建议**：前往 [GitHub Issues](https://github.com/posanbu/Kaguya/issues)，描述预期行为、实际表现和复现步骤。
 - **参与开发**：先阅读[贡献指南](CONTRIBUTING.md)，了解环境准备、模块边界和验证要求。
-- **编写模块**：从[信息模块开发](docs/developers/information-modules.md)开始，了解如何订阅信息、产生结果并接入运行时。
+- **编写模块**：从[信息模块开发](docs/developers/information-modules.md)开始，了解如何订阅信息、产生结果并接入运行时；外部副作用使用[持久行动与回执接口](docs/developers/continuous/action-lifecycle.md#持久执行接口)。
 - **查阅文档**：访问 [Kaguya 文档站](https://posanbu.github.io/Kaguya/)，或直接阅读仓库中的[文档索引](docs/README.md)。
 
 提交问题时，请隐去 API Key、管理访问链接和私人聊天内容。

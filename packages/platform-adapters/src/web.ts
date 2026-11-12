@@ -3,7 +3,7 @@
  * 但只保留外部 request ID，不构造 trace 或 information ID。
  * 主要职责：`normalizeWebInboundMessage` 严格校验 text/requestId、修剪两者、
  * 设置 web sender/destination 并通过可注入 `now` 生成 occurredAt；conversationId 隔离浏览器会话，旧匿名输入保持兼容。
- * createWebOutboundTransport 校验 Web 目标并生成平台回执，表示回复交给 Runtime 已有投递账本，不向外部平台发送。
+ * createWebOutboundTransport 校验 Web 目标并生成平台回执，表示回复交给 Runtime 已有投递账本；暂不支持图片时明确拒绝。
  * 代码库关系：Server `web-gateway.ts` 调用本函数后只经
  * `InformationIngress.submit` 进入 Runtime；输出契约来自 `types.ts`。
  * 输入输出与副作用：函数无 I/O，非法输入返回 `undefined`；
@@ -69,11 +69,22 @@ export function createWebOutboundTransport(
   adapterId = "web.ui.main",
 ): PlatformOutboundTransport {
   return {
-    async sendMessage(target) {
+    async sendMessage(target, message) {
       const destination = platformDestinationSchema.parse(target);
       if (destination.kind !== "web") {
         throw new Error("Web transport only accepts web destinations");
       }
+      if (message.kind === "content")
+        return {
+          ok: false,
+          outcome: "rejected-before-effect",
+          adapterId,
+          platform: "web",
+          target: destination,
+          error: "Web transport does not support media delivery",
+        };
+      if (message.kind === "audio")
+        throw new Error("Web transport does not support audio delivery");
       return {
         ok: true,
         adapterId,

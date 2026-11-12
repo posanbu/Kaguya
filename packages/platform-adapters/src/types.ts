@@ -1,5 +1,5 @@
 /**
- * expressions 是可选 QQ 素材元数据；其他平台无需提供，不包含视觉识别结果。
+ * expressions 是旧 QQ 素材元数据；contentSegments 保留入站顺序与未经信任的来源句柄，不包含视觉识别结果。
  * 功能概述：定义平台 adapter 与 Core ingress 之间的最小结构契约，
  * 使 Web、NapCat 和 Runtime 只共享正规化内容、外部平台身份与接收回执。
  * 主要职责：`PlatformInboundMessage` 保留 adapter/platform、外部 message ID、
@@ -10,6 +10,7 @@
  * 仅持有 ingress，`KaguyaRuntime` 结构性实现该接口并生成 Core `informationId`。
  * 输入输出与副作用：本文件仅定义类型，无 I/O；`platformMessageId` 是外部数据，
  * 不是 Core identity，且契约中不存在 adapter 自造的跟踪身份。
+ * 出站图片字节仅在 transport 调用时随 metadata 传递，不能从模型提供的 URL 或路径读取。
  */
 import type {
   QqExpression,
@@ -36,6 +37,16 @@ export interface PlatformMessageReplyTo {
   readonly senderId?: string;
 }
 
+/** 来源句柄只供授权后的媒体接入层使用，不可作为出站地址或文件路径。 */
+export type PlatformInboundContentSegment =
+  | { readonly kind: "text"; readonly text: string }
+  | {
+      readonly kind: "media";
+      readonly position: number;
+      readonly mediaType: "image" | "face" | "mface";
+      readonly source: Readonly<Record<string, string>>;
+    };
+
 export interface PlatformInboundMessage {
   readonly platform: PlatformName;
   readonly adapterId: string;
@@ -43,6 +54,8 @@ export interface PlatformInboundMessage {
   readonly platformMessageId: string;
   readonly occurredAt: string;
   readonly text: string;
+  /** 平台原始顺序；媒体来源句柄不代表已授权或已持久化素材。 */
+  readonly contentSegments?: readonly PlatformInboundContentSegment[];
   /** 可选结构化 QQ 表情素材；非 QQ 平台无需提供。 */
   readonly expressions?: readonly QqExpression[];
   readonly mentions: readonly PlatformMessageMention[];
@@ -54,6 +67,8 @@ export interface PlatformInboundMessage {
 
 export interface PlatformDeliveryReceipt {
   readonly ok: boolean;
+  /** 未声明的失败保守解释为 unknown，不能据此重发。 */
+  readonly outcome?: "delivered" | "rejected-before-effect" | "unknown";
   readonly adapterId: string;
   readonly platform: PlatformName;
   readonly target: PlatformMessageTarget;
@@ -75,6 +90,23 @@ export interface PlatformOutboundTransport {
   sendMessage(
     target: PlatformMessageTarget,
     message: OutboundMessageContent,
-    metadata?: Record<string, unknown>,
+    metadata?: PlatformOutboundMetadata,
   ): Promise<PlatformDeliveryReceipt>;
+}
+
+export interface PlatformOutboundMetadata extends Record<string, unknown> {
+  readonly rootInformationId?: InformationId;
+  /** 仅在调用 transport 时存在，不进入 Information Ledger。 */
+  readonly media?: {
+    readonly bytes: Uint8Array;
+    readonly mimeType: string;
+    readonly sha256: string;
+  };
+  /** 已由 Runtime 核对来源、场景与内容的图片，段顺序由消息本身决定。 */
+  readonly images?: readonly {
+    readonly mediaId: string;
+    readonly bytes: Uint8Array;
+    readonly mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+    readonly sha256: string;
+  }[];
 }

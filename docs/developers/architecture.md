@@ -11,6 +11,8 @@ Core 中每项运行事实都是不可变 `InformationAtom`，且只以 `informa
 
 在项目的持续 Agent 语义中，相关 Information 到达可以形成一次 wake tick：它提醒系统某个场景发生了变化，但不自动构成 turn、回复或长期记忆。`InformationAtom` 是证据与触发载体，模块订阅的原子也不自动等于模块需要理解的完整业务输入。术语和模块检查项见[持续 Agent 设计原则](./continuous-agent)。
 
+行动仓储在 Memory 发布锁与 action 行锁内裁决开始资格，事务提交后由 Runtime 调用 provider。授权绑定完整执行规格，回执保留原 intent/attempt；运行中的恢复扫描将过期且未确认的 attempt 记为 `unknown`。实际送入后继模型提示的 Memory 补充证据也参与发送前检查，见[持久执行接口](./continuous/action-lifecycle#持久执行接口)。
+
 ## 运行形态
 
 ```mermaid
@@ -31,6 +33,8 @@ flowchart LR
 ```
 
 开发模式把 Vite middleware 与 HMR 挂在 Fastify 内；生产模式由同一实例提供 `apps/web/dist`。Web 消息也先规范化为平台 `web`、adapter `web.ui.main` 的入站消息，再异步交给 Runtime。NapCat 是可选 ingress 与 transport，连接失败不会停止 HTTP 服务或改变 `/healthz`。
+
+Linux 工具环境由独立 `kaguya-tools` UID 下的 rootless Podman broker 管理。Runtime 通过 `LinuxEnvironmentClient` 将公开环境身份与临时凭据接入 ActionProvider；broker journal 保存执行物理事实，业务事实仍进入 Information 账本。安装与镜像验收边界见 [Linux 隔离工具环境](./continuous/action-lifecycle#linux-隔离工具环境)。
 
 ## Runtime Composition 边界
 

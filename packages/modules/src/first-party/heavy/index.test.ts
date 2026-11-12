@@ -1,12 +1,7 @@
 /**
+ * 升级兼容回归跨页查询旧投递；pending/delivered/unknown及确认因果链均阻止重复输出。
  * 功能概述：验证消息编写的严格意图契约及 intent→Model Task→assistant→纯文本投递三个阶段。
- * 主要职责：保护 modelTier 唯一配置、完整 turn Prompt、失败与取消无业务写入、完成任务 task/version/definition/tier 过滤及外部实例隔离与目标元数据最小化。
- * 后缀模板用例验证构造时拒绝非法变量、背景覆盖的重复插值与实际溯源，以及表达习惯使用注入模板。
- * 代码库关系：真实模块订阅与 schema 配合受限内存 handler context；不绕过编译器或输出校验。
- * 输入输出与副作用：记录模型执行与 registerOnce 调用，无真实模型、数据库或网络。
- */
-/**
- * 功能概述：验证消息编写的严格意图契约及 intent→Model Task→assistant→纯文本投递三个阶段。
+ * 有序输出用例检查纯媒体、图文顺序和冻结请求授权，未允许引用不得登记待发消息。
  * 主要职责：保护 modelTier 唯一配置、完整 turn Prompt、失败与取消无业务写入、完成任务 task/version/definition/tier 过滤及外部实例隔离与目标元数据最小化。
  * 后缀模板用例验证构造时拒绝非法变量、背景覆盖的重复插值与实际溯源，以及表达习惯使用注入模板。
  * 代码库关系：真实模块订阅与 schema 配合受限内存 handler context；不绕过编译器或输出校验。
@@ -21,6 +16,7 @@ import {
 import { z } from "@kaguya/schema";
 import {
   assistantTextInformationKind,
+  authorizedAssistantOutputInformationKind,
   messageIntentRequestedInformationPayloadSchema,
 } from "../information-kinds.js";
 import { loadFirstPartyPromptTemplates } from "../../node/prompt-templates.js";
@@ -236,6 +232,7 @@ describe("message composer", () => {
     const s = await setup();
     expect(s.definition.manifest.definitionId).toBe("agent.heavy");
     expect(s.definition.manifest.requires).toEqual([
+      { id: "agent:message-output-processor", apiVersion: 1 },
       { id: "kaguya:model-task", apiVersion: 1 },
       { id: "kaguya:schedule.one-shot", apiVersion: 1 },
     ]);
@@ -287,7 +284,7 @@ describe("message composer", () => {
       }),
     );
   });
-  it("records target-only assistant and text delivery, preserving turn without reply markers", async () => {
+  it("records target-only assistant and authorized output, preserving turn without reply markers", async () => {
     const s = await setup();
     const completed = atom("completed-1", completedKind.kind, {
       taskId: "agent.heavy.respond",
@@ -318,23 +315,135 @@ describe("message composer", () => {
         s.f.intent.payload,
       ).turn,
     });
-    await s.instance.subscriptions[2]!.handle(assistant as never, s.context);
+    await s.instance.subscriptions[2]!.handle(assistant as never, {
+      ...s.context,
+      sourceAtom: assistant,
+    });
     expect(s.registerOnce).toHaveBeenLastCalledWith(
-      "kaguya.heavy.delivery.v1",
+      "kaguya.heavy.authorized-output.v1",
       `${activation.instanceId}:assistant-1`,
       expect.anything(),
       {
-        payload: {
-          ...target,
-          message: { kind: "text", text: "COMPOSED" },
-          turn: s.f.intent.payload.turn,
-        },
-        references: [
-          { relation: "agent:turn-claim", informationId: "claim-1" },
-          { relation: "agent:turn-candidate", informationId: "candidate-1" },
-        ],
+        payload: assistant.payload,
       },
     );
+  });
+  it.each(["pure", "mixed"])(
+    "preserves %s media output and its frozen request through assistant registration",
+    async (mode) => {
+      const s = await setup();
+      const mediaId = `media:${"a".repeat(64)}`;
+      const contentSegments =
+        mode === "pure"
+          ? [{ kind: "mediaRef" as const, mediaId }]
+          : [
+              { kind: "text" as const, text: "before" },
+              { kind: "mediaRef" as const, mediaId },
+              { kind: "text" as const, text: "after" },
+            ];
+      const text = mode === "pure" ? "" : "beforeafter";
+      const requested = atom("request-media", "core.model.task.requested", {
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  mediaInput: {
+                    mediaId,
+                    resourceId: `sha256:${"b".repeat(64)}`,
+                    mode: "off",
+                    status: "vision-off",
+                  },
+                }),
+              },
+            ],
+          },
+        ],
+      });
+      vi.mocked(s.context.select).mockResolvedValue([...s.f.atoms, requested]);
+      const completed = atom("completed-media", completedKind.kind, {
+        taskId: "agent.heavy.respond",
+        sourceInformationId: s.f.intent.informationId,
+        activation,
+        selectionPolicy: { tier: "heavy" },
+        outputMode: "object",
+        output: { action: "message", text, contentSegments },
+      });
+      await s.instance.subscriptions[1]!.handle(completed as never, s.context);
+      expect(s.registerOnce).toHaveBeenCalledTimes(1);
+      expect(s.registerOnce).toHaveBeenCalledWith(
+        "kaguya.heavy.assistant.v1",
+        `${activation.instanceId}:completed-media`,
+        assistantTextInformationKind,
+        {
+          payload: {
+            text,
+            contentSegments,
+            mediaRequestInformationId: requested.informationId,
+            source: target,
+            originatingModuleInstanceId: activation.instanceId,
+            turn: s.f.intent.payload.turn,
+          },
+        },
+      );
+    },
+  );
+  it("rejects fabricated or unavailable media references before creating an assistant", async () => {
+    const s = await setup();
+    const mediaId = `media:${"a".repeat(64)}`;
+    const requested = atom("request-media", "core.model.task.requested", {
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                mediaInput: {
+                  mediaId,
+                  resourceId: `sha256:${"b".repeat(64)}`,
+                  mode: "native",
+                  status: "vision-unavailable",
+                },
+              }),
+            },
+          ],
+        },
+      ],
+    });
+    vi.mocked(s.context.select).mockResolvedValue([...s.f.atoms, requested]);
+    const completed = atom("completed-media", completedKind.kind, {
+      taskId: "agent.heavy.respond",
+      sourceInformationId: s.f.intent.informationId,
+      activation,
+      selectionPolicy: { tier: "heavy" },
+      outputMode: "object",
+      output: {
+        action: "message",
+        text: "",
+        contentSegments: [{ kind: "mediaRef", mediaId }],
+      },
+    });
+    await expect(
+      s.instance.subscriptions[1]!.handle(completed as never, s.context),
+    ).rejects.toThrow("MEDIA_OUTPUT_NOT_IN_FROZEN_INPUT");
+    expect(s.registerOnce).not.toHaveBeenCalled();
+    expect(
+      messageResponseOutputSchema.safeParse({
+        action: "message",
+        text: "different",
+        contentSegments: [{ kind: "text", text: "actual" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      messageResponseOutputSchema.safeParse({
+        action: "message",
+        text: "",
+        contentSegments: [],
+      }).success,
+    ).toBe(false);
   });
   it("ignores foreign task definitions and model tiers before selecting context", async () => {
     const s = await setup();
@@ -437,3 +546,145 @@ it("does not deliver assistant text originating from another module instance", a
   expect(s.context.select).not.toHaveBeenCalled();
   expect(s.registerOnce).not.toHaveBeenCalled();
 });
+
+it.each(["pending", "delivered", "unknown"] as const)(
+  "keeps legacy %s delivery identity across both assistant and confirmed replay",
+  async (status) => {
+    for (const legacyCause of ["assistant", "confirmed"] as const) {
+      for (const replaySource of ["assistant", "confirmed"] as const) {
+        const s = await setup();
+        const assistant = atom(
+          "legacy-assistant",
+          assistantTextInformationKind.kind,
+          {
+            text: "已经由旧版本提交的正文",
+            source: target,
+            originatingModuleInstanceId: activation.instanceId,
+            turn: null,
+          },
+        );
+        const confirmed = atom(
+          "legacy-confirmed",
+          "agent.heavy.message.content.confirmed",
+          {
+            assistantInformationId: assistant.informationId,
+          },
+          [
+            {
+              relation: "core:caused-by",
+              informationId: assistant.informationId,
+            },
+          ],
+        );
+        const delivery = atom(
+          "legacy-delivery",
+          "core.delivery.requested",
+          {
+            adapterId: target.adapterId,
+            platform: target.platform,
+            destination: target.destination,
+            message: { kind: "text", text: "已经由旧版本提交的正文" },
+            turn: null,
+          },
+          [
+            {
+              relation: "core:caused-by",
+              informationId:
+                legacyCause === "assistant"
+                  ? assistant.informationId
+                  : confirmed.informationId,
+            },
+          ],
+        );
+        // 旧因果边位于第二页；终态存在与否都不能让升级生成第二份输出。
+        const noise = Array.from({ length: 1000 }, (_, i) =>
+          atom(`legacy-noise-${i}`, "test.legacy.audit", {}, [
+            {
+              relation: "core:caused-by",
+              informationId: assistant.informationId,
+            },
+          ]),
+        );
+        const graph = [assistant, ...noise, confirmed, delivery];
+        if (status !== "pending")
+          graph.push(
+            atom(
+              "legacy-terminal",
+              status === "delivered"
+                ? "core.delivery.delivered"
+                : "core.delivery.failed",
+              {
+                ok: status === "delivered",
+                ...(status === "unknown" ? { outcome: "unknown" } : {}),
+              },
+              [
+                {
+                  relation: "core:status-of",
+                  informationId: delivery.informationId,
+                },
+              ],
+            ),
+          );
+        const sourceAtom = replaySource === "assistant" ? assistant : confirmed;
+        const related = vi.fn(
+          async ({
+            from,
+            relation,
+            direction,
+            offset = 0,
+            limit = 1000,
+          }: any) => {
+            const matches =
+              direction === "incoming"
+                ? graph.filter((entry) =>
+                    entry.references.some(
+                      (ref) =>
+                        ref.relation === relation &&
+                        from.includes(ref.informationId),
+                    ),
+                  )
+                : graph.filter((entry) =>
+                    graph.some(
+                      (origin) =>
+                        from.includes(origin.informationId) &&
+                        origin.references.some(
+                          (ref) =>
+                            ref.relation === relation &&
+                            ref.informationId === entry.informationId,
+                        ),
+                    ),
+                  );
+            return matches.slice(offset, offset + limit);
+          },
+        );
+        const ledger = {
+          related,
+          find: async () => [],
+          retrieve: async () => [],
+        };
+        vi.mocked(s.context.select).mockImplementation(async (selector) => {
+          const ids = await selector.select({ sourceAtom, ledger });
+          return ids.map((id) =>
+            graph.find((entry) => entry.informationId === id)!,
+          );
+        });
+        const subscription = s.instance.subscriptions.find(
+          (entry) => entry.subscriptionId === `kaguya.heavy.${replaySource}`,
+        )!;
+        expect(subscription).toBeDefined();
+        await subscription.handle(sourceAtom as never, {
+          ...s.context,
+          sourceAtom,
+        });
+        expect(related).toHaveBeenCalledWith(
+          expect.objectContaining({
+            from: [assistant.informationId],
+            offset: 1000,
+          }),
+        );
+        expect(s.registerOnce).not.toHaveBeenCalled();
+        expect(s.execute).not.toHaveBeenCalled();
+      }
+    }
+  },
+);

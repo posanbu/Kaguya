@@ -5,8 +5,9 @@
  * 代码库关系：使用 AI SDK 的内存模型隔离 provider；客户端实现位于同目录的 client.ts。
  * 输入输出与副作用：仅在内存中调用模型，不产生持久化；无效输出应转为分类后的客户端错误。
  */
-import type { CompiledPrompt } from "@kaguya/schema";
+import type { CompiledPrompt, NativeMessage } from "@kaguya/schema";
 import { z } from "@kaguya/schema";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { APICallError, RetryError } from "ai";
 import { MockLanguageModelV3 } from "ai/test";
 import { describe, expect, it } from "vitest";
@@ -454,4 +455,235 @@ it("preserves native reasoning and protocol metadata across the messages boundar
       { type: "text", text: "silence" },
     ],
   });
+});
+
+it("captures native call IDs and invalid arguments before SDK validation without executing tools", async () => {
+  const nativeModel = new MockLanguageModelV3({
+    doGenerate: {
+      content: [
+        {
+          type: "reasoning",
+          text: "保留的推理",
+          providerMetadata: { fixture: { signature: "opaque" } },
+        },
+        {
+          type: "tool-call",
+          toolCallId: "original-call",
+          toolName: "t_native",
+          input: '{"broken":',
+        },
+        {
+          type: "tool-call",
+          toolCallId: "unknown-call",
+          toolName: "missing",
+          input: "{}",
+        },
+      ],
+      finishReason: { unified: "tool-calls", raw: "tool_calls" },
+      usage: {
+        inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 2, text: 1, reasoning: 1 },
+      },
+      warnings: [],
+    },
+  });
+  const client = new KaguyaLlmClient({ model: nativeModel });
+  const result = await client.generate({
+    modelId: "native",
+    prompt,
+    outputMode: "object",
+    outputSchema,
+    tools: [
+      {
+        id: "domain.tool",
+        version: "1",
+        wireName: "t_native",
+        description: "test",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+    ],
+  });
+  expect(result.kind).toBe("tool-calls");
+  if (result.kind !== "tool-calls") throw new Error("Expected native calls");
+  expect(result.calls).toEqual([
+    {
+      toolCallId: "original-call",
+      toolName: "t_native",
+      rawInput: '{"broken":',
+      input: null,
+      validation: "invalid-input",
+    },
+    {
+      toolCallId: "unknown-call",
+      toolName: "missing",
+      rawInput: "{}",
+      input: {},
+      validation: "unknown-tool",
+    },
+  ]);
+  expect(result.native?.messages.every((m) => m.role === "assistant")).toBe(
+    true,
+  );
+  expect(JSON.stringify(result.native)).toContain("opaque");
+  expect(nativeModel.doGenerateCalls).toHaveLength(1);
+});
+it("makes no hidden JSON repair request when a native final answer is invalid", async () => {
+  const model = new MockLanguageModelV3({
+    doGenerate: {
+      content: [{ type: "text", text: "invalid json" }],
+      finishReason: { unified: "stop", raw: "stop" },
+      usage: {
+        inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 1, text: 1, reasoning: 0 },
+      },
+      warnings: [],
+    },
+  });
+  await expect(
+    new KaguyaLlmClient({ model }).generate({
+      modelId: "native",
+      prompt,
+      outputMode: "object",
+      outputSchema,
+      tools: [],
+    }),
+  ).rejects.toBeInstanceOf(KaguyaLlmError);
+  expect(model.doGenerateCalls).toHaveLength(1);
+});
+
+it("replays the original invalid arguments and IDs in a real compatible wire request", async () => {
+  const requests: any[] = [];
+  const raw = '{ "broken":';
+  const provider = createOpenAICompatible({
+    name: "native-wire",
+    baseURL: "https://synthetic.invalid/v1",
+    fetch: async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return new Response(
+        JSON.stringify({
+          id: "fixture",
+          model: "native",
+          object: "chat.completion",
+          created: 1,
+          choices: [
+            {
+              index: 0,
+              message:
+                requests.length === 1
+                  ? {
+                      role: "assistant",
+                      content: null,
+                      reasoning_content: "opaque reasoning",
+                      tool_calls: [
+                        {
+                          id: "original/id",
+                          type: "function",
+                          function: { name: "t_native", arguments: raw },
+                        },
+                      ],
+                    }
+                  : { role: "assistant", content: "done" },
+              finish_reason: requests.length === 1 ? "tool_calls" : "stop",
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+  const client = new KaguyaLlmClient({ model: provider.chatModel("native") });
+  const tools = [
+    {
+      id: "native.tool",
+      version: "1",
+      wireName: "t_native",
+      description: "native",
+      inputSchema: { type: "object", properties: {} },
+    },
+  ];
+  const imageUrl =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jK1EAAAAASUVORK5CYII=";
+  const inputMessages: NativeMessage[] = [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Inspect this image" },
+        { type: "image", image: imageUrl },
+      ],
+    },
+  ];
+  const first = await client.generate({
+    modelId: "native",
+    messages: inputMessages,
+    outputMode: "text",
+    outputSchema: z.string(),
+    tools,
+  });
+  expect(first.kind).toBe("tool-calls");
+  expect(
+    first.native?.messages.flatMap((m) =>
+      Array.isArray(m.content) ? m.content : [],
+    ),
+  ).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        type: "tool-call",
+        toolCallId: "original/id",
+        rawInput: raw,
+      }),
+    ]),
+  );
+  await client.generate({
+    modelId: "native",
+    messages: [
+      ...JSON.parse(JSON.stringify(inputMessages)),
+      ...JSON.parse(JSON.stringify(first.native!.messages)),
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "original/id",
+            toolName: "t_native",
+            output: {
+              type: "json",
+              value: {
+                status: "rejected",
+                reason: "invalid-input",
+                evidence: "not-executed",
+              },
+            },
+          },
+        ],
+      },
+    ],
+    outputMode: "text",
+    outputSchema: z.string(),
+    tools,
+  });
+  expect(requests).toHaveLength(2);
+  const firstImage = requests[0].messages
+    .find((m: any) => m.role === "user")
+    .content.find((p: any) => p.type === "image_url");
+  expect(firstImage.image_url.url).toBe(imageUrl);
+  expect(
+    requests[1].messages.find((m: any) => m.role === "user").content,
+  ).toEqual(requests[0].messages.find((m: any) => m.role === "user").content);
+  expect(
+    requests[1].messages.find((m: any) => m.role === "assistant").tool_calls,
+  ).toEqual([
+    {
+      id: "original/id",
+      type: "function",
+      function: { name: "t_native", arguments: raw },
+    },
+  ]);
+  expect(
+    requests[1].messages.find((m: any) => m.role === "tool").tool_call_id,
+  ).toBe("original/id");
 });

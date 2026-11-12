@@ -3,6 +3,7 @@
  * 模块领域视图由 Manifest 指定 Kind/字段；仅查询持久化事实，语义摘要在统一脱敏后返回。
  * 主要职责：createInspectionService 提供模块、游标 Atom 页、详情和以 runtime context 为界的 Flow；
  * registerInspectionRoutes 仅注册 GET，先认证再校验查询，返回稳定错误及 no-store 缓存策略。
+ * domain 增加 observation/progress/run/action/Memory/GUI 只读投影，沿用认证和安全错误边界。
  * 代码库关系：由 app.ts 注册，server.ts 注入已启动 Runtime 的 inspectModules 和数据库只读端口；
  * schema 包约束 DTO，inspection-redaction.ts 统一清理所有响应，WebUI 不接触配置或原始数据库对象。
  * 输入输出与副作用：只执行有界读取；游标绑定过滤条件并校验时间/ID；Flow 不递归扩展其他 context，
@@ -24,6 +25,9 @@
  * model-request-browser 通过 inspection-requests.ts 读取模块归属的模型请求，独立详情与完整 Prompt 使用同一认证和脱敏边界。
  * 节点最多 500，边最多 2000，详情引用最多 100，明确报告截断和图外引用；无编辑、重放或订阅。
  */
+import { createDomainInspection } from "./inspection-domain.js";
+import { InspectionDomainError } from "./inspection-domain-common.js";
+import type { InspectionEnvironmentSource } from "./inspection-environments.js";
 import {
   recordItems,
   recordEntity,
@@ -194,6 +198,7 @@ export interface InspectionSource {
   readonly secrets: unknown;
   readonly database?: KaguyaDatabase;
   readonly now?: () => Date;
+  readonly environments?: () => InspectionEnvironmentSource | undefined;
 }
 type SurfaceBrowser = Extract<
   ModuleInspectionSurfaceV1["components"][number],
@@ -510,11 +515,13 @@ async function buildSurfaceItems(
   });
 }
 export function createInspectionService(source: InspectionSource) {
+  const domains = createDomainInspection(source);
   const redact = createInspectionRedactor(source.secrets);
   const modules = () =>
     inspectionModulesSchema.parse({ version: 1, modules: source.modules() })
       .modules;
   return {
+    domains,
     async situation() {
       return redact(await readSituation(source.ledger));
     },
@@ -1062,6 +1069,62 @@ export function registerInspectionRoutes(
     string,
     (request: FastifyRequest, service: InspectionService) => unknown,
   ][] = [
+    [
+      "sources/:id",
+      (r, s) =>
+        s.domains.source(parseRequest(z.object({ id }), r.params).id, r.query),
+    ],
+    ["observations", (r, s) => s.domains.observations(r.query)],
+    [
+      "observations/:id",
+      (r, s) =>
+        s.domains.observation(
+          parseRequest(z.object({ id }), r.params).id,
+          r.query,
+        ),
+    ],
+    ["progress", (r, s) => s.domains.progress(r.query)],
+    ["runs", (r, s) => s.domains.runs(r.query)],
+    [
+      "runs/:id",
+      (r, s) =>
+        s.domains.run(parseRequest(z.object({ id }), r.params).id, r.query),
+    ],
+    ["actions", (r, s) => s.domains.actions(r.query)],
+    [
+      "actions/:id",
+      (r, s) =>
+        s.domains.action(parseRequest(z.object({ id }), r.params).id, r.query),
+    ],
+    [
+      "memory/:id/history",
+      (r, s) =>
+        s.domains.memoryHistory(
+          parseRequest(z.object({ id }), r.params).id,
+          r.query,
+        ),
+    ],
+    ["gui-tasks", (r, s) => s.domains.guiTasks(r.query)],
+    [
+      "gui-tasks/:id",
+      (r, s) =>
+        s.domains.guiTask(parseRequest(z.object({ id }), r.params).id, r.query),
+    ],
+    [
+      "environments/:id",
+      (r, s) =>
+        s.domains.environment(
+          parseRequest(z.object({ id }), r.params).id,
+          r.query,
+        ),
+    ],
+    [
+      "environments/:id/operations/:operationId",
+      (r, s) => {
+        const p = parseRequest(z.object({ id, operationId: id }), r.params);
+        return s.domains.humanOperation(p.id, p.operationId, r.query);
+      },
+    ],
     ["modules", (_, s) => s.modules()],
     ["situation", (_, s) => s.situation()],
     [
@@ -1140,9 +1203,14 @@ export function registerInspectionRoutes(
           if (!active) throw new InspectionError(503, "inspection_unavailable");
           return { data: await handler(request, active) };
         } catch (error) {
-          const status = error instanceof InspectionError ? error.status : 500;
+          const status =
+            error instanceof InspectionError ||
+            error instanceof InspectionDomainError
+              ? error.status
+              : 500;
           const code =
-            error instanceof InspectionError
+            error instanceof InspectionError ||
+            error instanceof InspectionDomainError
               ? error.code
               : status === 400
                 ? "invalid_inspection_request"

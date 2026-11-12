@@ -1,4 +1,5 @@
 /**
+ * KAGUYA_NATIVE_MEMORY_TOOLS=1 显式启用宿主 Memory 工具；仍要求 Memory 模块启用。
  * createServerConfig 分别读取 inboundAllowlist/outboundAllowlist；不回退旧 gatewayAllowlist 或互相继承。
  * 功能概述：把 selected Profile 的 runtime/platform 配置转换为 Server 唯一启动配置。
  * 主要职责：环境只定位 Profile Registry 并选择开发模式；host、port、PostgreSQL、
@@ -28,11 +29,13 @@ const defaultConfigRoot = fileURLToPath(
 );
 
 export interface ServerBootstrapConfig {
+  readonly nativeMemoryTools?: boolean;
   readonly configRoot: string;
   readonly development: boolean;
 }
 
 export interface ServerConfig {
+  readonly nativeMemoryTools?: boolean;
   readonly host: string;
   readonly port: number;
   readonly gatewayToken: string;
@@ -79,6 +82,9 @@ export function readServerBootstrapConfig(
     configRoot:
       optionalText(environment.KAGUYA_CONFIG_ROOT) ?? defaultConfigRoot,
     development: environment.NODE_ENV === "development",
+    ...(environment.KAGUYA_NATIVE_MEMORY_TOOLS === "1"
+      ? { nativeMemoryTools: true }
+      : {}),
   };
 }
 
@@ -107,6 +113,7 @@ export function createServerConfig(
     databaseUrl: runtime.databaseUrl,
     configRoot: bootstrap.configRoot,
     development: bootstrap.development,
+    ...(bootstrap.nativeMemoryTools ? { nativeMemoryTools: true } : {}),
     webDistPath: runtime.webDistPath,
     logLevel: runtime.logLevel,
     logFormat: runtime.logFormat,

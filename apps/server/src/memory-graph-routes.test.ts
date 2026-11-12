@@ -4,12 +4,6 @@
  * 代码库关系：组合 app.ts 路由和 database.memoryGraph，不启动 Runtime 或调用外部模型。
  * 输入输出与副作用：等待明确的 HTTP/数据库 Promise；afterAll 关闭应用及数据库，无 sleep 或后台轮询。
  */
-/**
- * 功能概述：以真实隔离 PGlite 和 Fastify inject 验证 Memory 图管理 HTTP 契约。
- * 主要职责：检查管理认证、有界完整图、正文／标签筛选、一跳邻域、节点编辑、删除后不可编辑及关系级联删除。
- * 代码库关系：组合 app.ts 路由和 database.memoryGraph，不启动 Runtime 或调用外部模型。
- * 输入输出与副作用：等待明确的 HTTP/数据库 Promise；afterAll 关闭应用及数据库，无 sleep 或后台轮询。
- */
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestingDatabase } from "@kaguya/database/testing";
@@ -130,5 +124,31 @@ describe("versioned Memory HTTP management", () => {
     });
     expect(history.statusCode).toBe(200);
     expect(history.json().data).toHaveLength(2);
+    const firstPage = await app.inject({
+      url: `/api/v1/memory/nodes/${id}/history-page?limit=1`,
+      headers,
+    });
+    expect(firstPage.statusCode).toBe(200);
+    expect(firstPage.json().data.items[0].node.metadata.revision).toBe(2);
+    expect(firstPage.json().data.hasMore).toBe(true);
+    const cursor = firstPage.json().data.nextCursor;
+    const secondPage = await app.inject({
+      url: `/api/v1/memory/nodes/${id}/history-page?limit=1&cursor=${encodeURIComponent(cursor)}`,
+      headers,
+    });
+    expect(secondPage.json().data.items[0].node.metadata.revision).toBe(1);
+    expect(secondPage.json().data.hasMore).toBe(false);
+    expect(
+      (
+        await app.inject({
+          url: `/api/v1/memory/nodes/${id}/history-page?cursor=invalid`,
+          headers,
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (await app.inject({ url: `/api/v1/memory/nodes/${id}/history-page` }))
+        .statusCode,
+    ).toBe(401);
   });
 });

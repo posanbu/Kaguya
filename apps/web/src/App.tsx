@@ -167,7 +167,8 @@ interface ClearedLoadedProfileStateSnapshot {
 
 export function App() {
   const [token] = useState(() => readGatewayToken());
-  const { path, navigate, register } = useWorkbenchRouter();
+  const { path: location, navigate, register } = useWorkbenchRouter();
+  const path = location.split("?")[0]!;
   const [configurationView, setConfigurationView] = useState<ConfigurationView>(
     () => (token === "" ? "locked" : "checking"),
   );
@@ -245,11 +246,12 @@ export function App() {
     return <ConfigurationStatusError message={configurationError} />;
 
   const renderPage = () => {
-    if (path === "/situation") return <SituationPage token={token} />;
+    if (path === "/situation")
+      return <SituationPage token={token} location={location} />;
     if (path === "/memory")
       return (
         <Suspense fallback={<FieldMessage>正在加载记忆工作台…</FieldMessage>}>
-          <MemoryGraphPage token={token} />
+          <MemoryGraphPage token={token} location={location} />
         </Suspense>
       );
     if (isOverview)
@@ -276,6 +278,7 @@ export function App() {
           token={token}
           page={inspectionPage}
           path={path}
+          location={location}
           navigate={(next) => {
             void navigate(next);
           }}

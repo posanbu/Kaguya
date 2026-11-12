@@ -110,6 +110,9 @@ importers:
       '@kaguya/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@kaguya/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@kaguya/modules':
         specifier: workspace:*
         version: link:../../packages/modules
@@ -174,6 +177,15 @@ importers:
       vite:
         specifier: ^7.0.0
         version: 7.3.6(@types/node@24.13.3)(lightningcss@1.33.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  examples/plugins/qwen-tts:
+    devDependencies:
+      '@kaguya/schema':
+        specifier: link:../../../packages/schema
+        version: link:../../../packages/schema
+      '@kaguya/sdk':
+        specifier: link:../../../packages/sdk
+        version: link:../../../packages/sdk
 
   packages/agent-contracts:
     dependencies:
@@ -309,6 +321,34 @@ importers:
         specifier: 8.2.2
         version: 8.2.2
 
+  packages/mcp:
+    dependencies:
+      '@kaguya/config':
+        specifier: workspace:*
+        version: link:../config
+      '@kaguya/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@kaguya/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@kaguya/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@modelcontextprotocol/client':
+        specifier: 2.3.1
+        version: 2.3.1
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
+    devDependencies:
+      '@kaguya/database':
+        specifier: workspace:*
+        version: link:../database
+      '@kaguya/engine':
+        specifier: workspace:*
+        version: link:../engine
+
   packages/memory:
     dependencies:
       '@kaguya/schema':
@@ -396,6 +436,9 @@ importers:
       '@kaguya/sdk':
         specifier: workspace:*
         version: link:../sdk
+      sharp:
+        specifier: 0.35.3
+        version: 0.35.3(@types/node@24.13.3)
 
   packages/scheduler:
     dependencies:
@@ -422,6 +465,16 @@ importers:
         version: link:../schema
 
 packages:
+
+  '@modelcontextprotocol/core@2.3.1':
+    resolution: {integrity: sha512-laVmIhPGpWi7rG9q+0UigblRN0Hws/Yjlb6qLFtVqryXVLkc4h+yN8z731POD2LnAGQlFe7/tXhUm7Bi0YB91g==}
+    engines: {node: '>=20'}
+
+
+  '@modelcontextprotocol/client@2.3.1':
+    resolution: {integrity: sha512-mIGZXpHsjnZ6lD+gD/WCMpR5k8yVQQ8nNFH1N0Srf7AvnwTUMYD6pvTY8ng2+He5FfV7YMZLmrjL7cLa/cc3dQ==}
+    engines: {node: '>=20'}
+
 
   '@ai-sdk/gateway@3.0.155':
     resolution: {integrity: sha512-gP2i/z8gYqJNONZgUkfSe0u9iEvz+HJ/r+MKxmnJjSluPD9K9wwTs65KYyFl7pX8AEujnPny4Lq4l1ytPQD5TA==}
@@ -5964,6 +6017,22 @@ packages:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
 snapshots:
+
+  '@modelcontextprotocol/core@2.3.1':
+    dependencies:
+      zod: 4.4.3
+
+
+  '@modelcontextprotocol/client@2.3.1':
+    dependencies:
+      '@modelcontextprotocol/core': 2.3.1
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.0
+      jose: 6.2.4
+      pkce-challenge: 5.0.0
+      zod: 4.4.3
+
 
   '@ai-sdk/gateway@3.0.155(zod@4.4.3)':
     dependencies:

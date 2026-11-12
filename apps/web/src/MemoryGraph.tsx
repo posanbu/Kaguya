@@ -6,15 +6,7 @@
  * 节点新增／编辑与有向连结共用 Radix 模态弹层；编辑载入原数据，图上连线保留端点，关闭经过草稿保护并返回对应入口。
  * 代码库关系：App 在 /memory 挂载；Canvas 复用 react-force-graph 高亮示例，API 对接 PostgresMemoryGraphStore。
  * 输入输出与副作用：只在显式保存／删除时写数据库；失败保留草稿，过期读取取消，离开保护未保存输入。
- */
-/**
- * 功能概述：Memory 工作台，提供图检视、节点正文／metadata 编辑及有向关系管理。
- * 主要职责：维护有界筛选、游标、单节点邻域、选择与草稿；关系以方向／类型／节点的紧凑行展示。
- * 顶部按当前返回范围显示“回忆”数量；操作成功后重新读取真实快照。
- * 筛选区统一对齐搜索、标签和时间控件；时间范围按需展开，新建有向边的入口称为“新增连结”。
- * 节点新增／编辑与有向连结共用 Radix 模态弹层；编辑载入原数据，图上连线保留端点，关闭经过草稿保护并返回对应入口。
- * 代码库关系：App 在 /memory 挂载；Canvas 复用 react-force-graph 高亮示例，API 对接 PostgresMemoryGraphStore。
- * 输入输出与副作用：只在显式保存／删除时写数据库；失败保留草稿，过期读取取消，离开保护未保存输入。
+ * inspect 查询进入正式领域历史并停止读取当前图；证明不可用时不以图正文回退。
  */
 import {
   useCallback,
@@ -24,6 +16,8 @@ import {
   type FormEvent,
   type Ref,
 } from "react";
+import { DomainInspection } from "./DomainInspection.js";
+import { useWorkbenchNavigate } from "./components/AppShell.js";
 import {
   Plus,
   RefreshCw,
@@ -54,7 +48,6 @@ import {
 import { useNavigationGuard } from "./components/AppShell.js";
 import {
   readMemoryGraph,
-  readMemoryHistory,
   saveMemoryNode,
   deleteMemoryNode,
   saveMemoryEdge,
@@ -81,7 +74,14 @@ const splitTags = (value: string) => [
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "操作失败，请重试。";
 
-export function MemoryGraph({ token }: { token: string }) {
+export function MemoryGraph({
+  token,
+  location = "/memory",
+}: {
+  token: string;
+  location?: string;
+}) {
+  const inspecting = new URLSearchParams(location.split("?")[1]).has("inspect");
   const [query, setQuery] = useState<MemoryGraphQuery>(() => ({
     limit: 100,
     system: "native-v1",
@@ -143,6 +143,7 @@ export function MemoryGraph({ token }: { token: string }) {
     return () => window.removeEventListener("beforeunload", prevent);
   }, [dirty, busy]);
   useEffect(() => {
+    if (inspecting) return;
     const controller = new AbortController();
     setLoading(true);
     setReadError("");
@@ -165,7 +166,7 @@ export function MemoryGraph({ token }: { token: string }) {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [token, query, revision]);
+  }, [token, query, revision, inspecting]);
 
   const selected = snapshot?.nodes.find((node) => node.id === selectedId);
   const edge = snapshot?.edges.find((item) => memoryEdgeId(item) === edgeId);
@@ -297,6 +298,13 @@ export function MemoryGraph({ token }: { token: string }) {
         : {}),
     });
   };
+  if (inspecting)
+    return (
+      <main className="memory-workspace">
+        <PageHeader title="记忆" />
+        <DomainInspection token={token} location={location} />
+      </main>
+    );
   return (
     <main className="memory-workspace">
       <PageHeader
@@ -1297,12 +1305,7 @@ function NativeMemoryDetails({
   node: MemoryNode;
   token: string;
 }) {
-  const [history, setHistory] = useState<unknown>();
-  const [error, setError] = useState("");
-  useEffect(() => {
-    setHistory(undefined);
-    setError("");
-  }, [node.id, node.metadata.revision]);
+  const navigate = useWorkbenchNavigate();
   return (
     <section aria-label="记忆层级与来源">
       {node.metadata.kind === "expression" && (
@@ -1341,25 +1344,27 @@ function NativeMemoryDetails({
         <summary>来源</summary>
         <pre>{JSON.stringify(node.metadata.sourceIds, null, 2)}</pre>
       </details>
-      <details
-        onToggle={(e) => {
-          if (e.currentTarget.open && history === undefined)
-            void readMemoryHistory(token, node.id).then(setHistory, (e) =>
-              setError(errorMessage(e)),
+      <p>
+        <a
+          href={`/memory?inspect=memory&selected=${encodeURIComponent(node.id)}`}
+          onClick={(event) => {
+            if (
+              event.button ||
+              event.metaKey ||
+              event.ctrlKey ||
+              event.shiftKey ||
+              event.altKey
+            )
+              return;
+            event.preventDefault();
+            void navigate(
+              `/memory?inspect=memory&selected=${encodeURIComponent(node.id)}`,
             );
-        }}
-      >
-        <summary>修订历史</summary>
-        {error ? (
-          <FieldMessage tone="error">{error}</FieldMessage>
-        ) : (
-          <pre className="memory-json">
-            {history === undefined
-              ? "正在读取…"
-              : JSON.stringify(history, null, 2)}
-          </pre>
-        )}
-      </details>
+          }}
+        >
+          按原观察查看精确修订与来源
+        </a>
+      </p>
     </section>
   );
 }

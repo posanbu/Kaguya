@@ -1,0 +1,41 @@
+#!/usr/bin/env node
+/** 功能概述：W6 协议 1 的单请求客户端，只转发 stdin 到固定内部 socket。
+ * 主要职责：限制请求/响应、等待 EOF；错误仅输出稳定代码，断连不重发，不声称取消后台任务。
+ * 代码库关系：由 podman exec 调用，init/service.mjs 持有浏览器与 job；内部地址不由模型指定。 */
+import { connect } from 'node:net';
+const chunks = [];
+let size = 0;
+for await (const chunk of process.stdin) {
+  size += chunk.length;
+  if (size > 262144) throw new Error('helper-request-limit');
+  chunks.push(chunk);
+}
+const request = Buffer.concat(chunks);
+const address = process.env.KAGUYA_CONTROL_SOCKET ?? `${process.env.HOME}/kaguya-tools.sock`;
+const health = JSON.parse(request).kind === 'health';
+const deadline = Date.now() + 14000;
+let waiting = false;
+async function openSocket() {
+  while (true) {
+    const socket = connect(address);
+    try {
+      await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
+      socket.removeAllListeners('error'); return socket;
+    } catch (error) {
+      socket.destroy();
+      if (!health || !['ENOENT', 'ECONNREFUSED'].includes(error.code) || Date.now() >= deadline) throw error;
+      if (!waiting) { waiting = true; process.stderr.write('helper-waiting-for-ready\n'); }
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  }
+}
+const socket = await openSocket();
+socket.setTimeout(300000, () => socket.destroy(new Error('helper-timeout')));
+let received = 0;
+socket.end(request);
+socket.on('data', chunk => {
+  received += chunk.length;
+  if (received > 24 * 1024 ** 2) socket.destroy(new Error('helper-response-limit'));
+  else process.stdout.write(chunk);
+});
+socket.on('error', () => { process.stderr.write('helper-unconfirmed\n'); process.exitCode = 1; });

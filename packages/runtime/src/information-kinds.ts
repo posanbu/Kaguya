@@ -1,4 +1,7 @@
 /**
+ * 模型 requested 可冻结独立媒体字节预算，保持旧纯文本请求兼容；只有受控媒体准备阶段写入。
+ * 原生模型绑定保存首次批准的 policy 与非秘密配置摘要；可选字段保留旧任务事实的可读性。
+ * 工具单步声明和原始调用随 requested/completed 保存，dispatched 为不自动重发的持久请求凭据。
  * conversationContextInformationKind 注册宿主冻结的背景与目标解析投影，内容日志仅输出目录状态。
  * 出站策略拒绝使用不含 target ID 的失败分支；消费者通过请求引用关联 turn，日志只投影安全字段。
  * Light 的普通请求日志仅投影任务元数据，不包含 Prompt 预览；显式 content detail 保留受控诊断。
@@ -43,6 +46,8 @@ import {
   compiledPromptSchema,
   nativeMessagesSchema,
   nativeResponseSchema,
+  nativeToolDeclarationSchema,
+  nativeToolCallSchema,
   jsonValueSchema,
   informationIdSchema,
   platformDestinationSchema,
@@ -53,6 +58,8 @@ import {
   defineInformationKind,
   type InformationKindDefinition,
 } from "@kaguya/sdk";
+
+import { guiTaskRequestedKind, guiTaskTerminalKind } from "./gui-task-kinds.js";
 
 const nonBlankString = z.string().trim().min(1);
 type InformationPromptVariable = JsonObject & {
@@ -262,6 +269,7 @@ export const deliveryFailedInformationKind = defineInformationKind({
 export const modelTaskSelectionPolicySchema = z
   .object({
     tier: z.enum(["light", "heavy"]),
+    routeId: nonBlankString.exactOptional(),
   })
   .strict();
 export const modelTaskOutputModeSchema = z.enum(["text", "object"]);
@@ -269,6 +277,10 @@ export const modelTaskResolvedModelSchema = z
   .object({
     providerId: nonBlankString,
     modelId: nonBlankString,
+    configurationDigest: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .exactOptional(),
   })
   .strict();
 const modelTaskProvenanceSchema = z.array(
@@ -280,6 +292,24 @@ const modelTaskProvenanceSchema = z.array(
     })
     .strict(),
 );
+export const modelTaskContextTrimmingSchema = z
+  .object({
+    measurement: z.literal("native-message-array-json-utf8"),
+    truncated: z.boolean(),
+    omittedSegments: z.number().int().nonnegative(),
+    originalBytes: z.number().int().nonnegative(),
+    retainedBytes: z.number().int().nonnegative(),
+    budgetBytes: z.number().int().positive(),
+  })
+  .strict();
+export const nativeModelBindingSchema = z
+  .object({
+    selectionPolicy: modelTaskSelectionPolicySchema,
+    resolvedModel: modelTaskResolvedModelSchema.extend({
+      configurationDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    }),
+  })
+  .strict();
 export const modelTaskMetadataSchema = z
   .object({
     taskId: nonBlankString,
@@ -292,6 +322,19 @@ export const modelTaskMetadataSchema = z
     promptTemplateDigest: nonBlankString,
     promptDigest: nonBlankString,
     messagesDigest: nonBlankString.nullable().default(null),
+    tools: z.array(nativeToolDeclarationSchema).max(64).exactOptional(),
+    contextTrimming: modelTaskContextTrimmingSchema.exactOptional(),
+    nativeModelBinding: nativeModelBindingSchema.exactOptional(),
+    nativeStep: z
+      .object({
+        runInformationId: informationIdSchema,
+        stepIndex: z.number().int().nonnegative(),
+        deadline: z.iso.datetime(),
+        maxContextBytes: z.number().int().positive(),
+        maxOutputBytes: z.number().int().positive(),
+      })
+      .strict()
+      .exactOptional(),
     provenance: modelTaskProvenanceSchema,
     activation: z
       .object({ instanceId: nonBlankString, definitionId: nonBlankString })
@@ -336,6 +379,7 @@ const modelTaskSafeErrorBaseSchema = z
       "native-protocol",
     ]),
     message: z.literal("Model task generation failed"),
+    reasonCode: z.enum(["dispatched-without-terminal"]).exactOptional(),
   })
   .strict();
 const structuredOutputFailureSchema = z.enum([
@@ -435,6 +479,12 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
     .extend({
       prompt: informationCompiledPromptSchema,
       messages: nativeMessagesSchema.nullable().default(null),
+      mediaInputByteLength: z
+        .number()
+        .int()
+        .positive()
+        .max(30 * 1024 * 1024)
+        .exactOptional(),
       inputBlocked: z
         .enum(["context-budget", "native-protocol"])
         .nullable()
@@ -485,6 +535,27 @@ export const modelTaskRequestedInformationKind = defineInformationKind({
 function digest(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
+export const modelTaskDispatchedInformationKind = defineInformationKind({
+  kind: "core.model.task.dispatched.v1",
+  displayName: "模型请求已领取",
+  description:
+    "调用前固定单次请求身份；无终态的恢复请求保持不确定，不能自动重发。",
+  payloadSchema: z
+    .object({
+      requestedInformationId: informationIdSchema,
+      nonce: nonBlankString,
+    })
+    .strict(),
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.model.task.requested"],
+    },
+  },
+  log: { enabled: false },
+});
+
 export const modelTaskCompletedInformationKind = defineInformationKind({
   kind: "core.model.task.completed",
   displayName: "模型任务完成",
@@ -496,6 +567,8 @@ export const modelTaskCompletedInformationKind = defineInformationKind({
         ...modelTaskTerminalShape,
         ...modelTaskUsageShape,
         output: modelTaskOutputSchema,
+        generationKind: z.enum(["final", "tool-calls"]).default("final"),
+        toolCalls: z.array(nativeToolCallSchema).default([]),
         native: nativeResponseSchema.nullable().default(null),
       })
       .strict(),
@@ -503,6 +576,8 @@ export const modelTaskCompletedInformationKind = defineInformationKind({
       .object({
         ...modelTaskTerminalShape,
         output: modelTaskOutputSchema,
+        generationKind: z.enum(["final", "tool-calls"]).default("final"),
+        toolCalls: z.array(nativeToolCallSchema).default([]),
         native: nativeResponseSchema.nullable().default(null),
       })
       .strict(),
@@ -640,6 +715,7 @@ function sanitizePromptForLogging(text: string): string {
     );
 }
 export const modelTaskInformationKinds = Object.freeze([
+  modelTaskDispatchedInformationKind,
   modelTaskRequestedInformationKind,
   modelTaskCompletedInformationKind,
   modelTaskFailedInformationKind,
@@ -647,6 +723,8 @@ export const modelTaskInformationKinds = Object.freeze([
 ] as const);
 
 export const builtInInformationKinds = Object.freeze([
+  guiTaskRequestedKind,
+  guiTaskTerminalKind,
   conversationContextInformationKind,
   targetAuthorizedInformationKind,
   messageConfirmedInformationKind,

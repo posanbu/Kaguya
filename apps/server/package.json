@@ -27,6 +27,7 @@
     "@kaguya/database": "workspace:*",
     "@kaguya/llm": "workspace:*",
     "@kaguya/logger": "workspace:*",
+    "@kaguya/mcp": "workspace:*",
     "@kaguya/modules": "workspace:*",
     "@kaguya/platform-adapters": "workspace:*",
     "@kaguya/runtime": "workspace:*",

@@ -1,7 +1,8 @@
 /**
  * 测试夹具显式装配 QQ 表情模板，验证新增模块契约与既有流程兼容。
  * 功能概述：验证 OneBot 入站事件仅被正规化为平台内容与外部身份，
- * 以及出站文本/回复如何编码为 OneBot action，不允许 adapter 生成 Core 身份。
+ * 以及出站文本/回复和有序图片如何编码为 OneBot action，不允许 adapter 生成 Core 身份。
+ * 同时检查图片和表情来源按原始位置保留，CQ 转义不会变成媒体段。
  * 主要职责：覆盖私聊、群聊、mention、降级 segment、自身消息过滤和发送 action；
  * 关键断言保留 `platformMessageId`、sender、destination 与外部时间，并排除 `traceId`
  * 和 `informationId`。
@@ -11,6 +12,11 @@
  * 无效、空白或机器人自发事件必须返回 `undefined`。
  */
 import { describe, expect, it } from "vitest";
+import {
+  outboundContentSegmentsSchema,
+  outboundMessageContentSchema,
+  validateOutboundMediaSelection,
+} from "@kaguya/schema";
 
 import {
   buildOneBotSendAction,
@@ -49,6 +55,153 @@ describe("normalizeOneBotMessageEvent", () => {
     });
     expect(message).not.toHaveProperty("traceId");
     expect(message).not.toHaveProperty("informationId");
+  });
+});
+
+describe("ordered outbound media", () => {
+  const id = `media:${"a".repeat(64)}`;
+  const image = {
+    mediaId: id,
+    bytes: new Uint8Array([1, 2, 3]),
+    mimeType: "image/png" as const,
+    sha256: "b".repeat(64),
+  };
+  const message = {
+    kind: "content" as const,
+    text: "beforeafter",
+    requestInformationId: "request:1",
+    segments: [
+      { kind: "text" as const, text: "before" },
+      { kind: "mediaRef" as const, mediaId: id },
+      { kind: "text" as const, text: "after" },
+    ],
+  };
+  it("preserves text and media order and encodes only resolved bytes", () => {
+    const result = buildOneBotSendAction(
+      { kind: "group", groupId: "42" },
+      message,
+      "echo",
+      { images: [image] },
+    );
+    expect(result.params.message).toEqual([
+      { type: "text", data: { text: "before" } },
+      { type: "image", data: { file: "base64://AQID" } },
+      { type: "text", data: { text: "after" } },
+    ]);
+  });
+  it("supports pure media and rejects missing or ambiguous resolved resources", () => {
+    const pure = {
+      ...message,
+      text: "",
+      segments: [{ kind: "mediaRef" as const, mediaId: id }],
+    };
+    expect(
+      buildOneBotSendAction({ kind: "private", userId: "7" }, pure, "echo", {
+        images: [image],
+      }).params.message,
+    ).toEqual([{ type: "image", data: { file: "base64://AQID" } }]);
+    expect(() =>
+      buildOneBotSendAction({ kind: "private", userId: "7" }, pure, "echo"),
+    ).toThrow(/resolved media/u);
+    expect(() =>
+      buildOneBotSendAction({ kind: "private", userId: "7" }, pure, "echo", {
+        images: [image, image],
+      }),
+    ).toThrow(/resolved media/u);
+  });
+  it("keeps a selected QQ expression after the ordered content", () => {
+    const result = buildOneBotSendAction(
+      { kind: "group", groupId: "42" },
+      { ...message, expression: { kind: "face", id: "14" } },
+      "echo",
+      { images: [image] },
+    );
+    expect(result.params.message.at(-1)).toEqual({
+      type: "face",
+      data: { id: "14" },
+    });
+    expect(result.params.message).toHaveLength(4);
+  });
+  it("validates text and bounds media references against the frozen request", () => {
+    const frozen = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              mediaInput: {
+                mediaId: id,
+                resourceId: `sha256:${"b".repeat(64)}`,
+                mode: "off",
+                status: "vision-off",
+              },
+            }),
+          },
+        ],
+      },
+    ];
+    expect(() =>
+      validateOutboundMediaSelection(message.text, message.segments, frozen),
+    ).not.toThrow();
+    expect(() =>
+      validateOutboundMediaSelection("changed", message.segments, frozen),
+    ).toThrow("MEDIA_OUTPUT_TEXT_MISMATCH");
+    expect(() =>
+      validateOutboundMediaSelection(message.text, message.segments, []),
+    ).toThrow("MEDIA_OUTPUT_NOT_IN_FROZEN_INPUT");
+    expect(() =>
+      outboundContentSegmentsSchema.parse([
+        { kind: "mediaRef", mediaId: "https://example.test/image" },
+      ]),
+    ).toThrow();
+    expect(() =>
+      outboundContentSegmentsSchema.parse([
+        { kind: "mediaRef", mediaId: id, path: "/private" },
+      ]),
+    ).toThrow();
+    expect(() =>
+      outboundContentSegmentsSchema.parse(
+        Array.from({ length: 5 }, () => ({ kind: "mediaRef", mediaId: id })),
+      ),
+    ).toThrow();
+    expect(() => outboundContentSegmentsSchema.parse([])).toThrow();
+    expect(() =>
+      outboundContentSegmentsSchema.parse([{ kind: "text", text: "plain" }]),
+    ).toThrow();
+    expect(
+      outboundMessageContentSchema.safeParse({ ...message, text: "changed" })
+        .success,
+    ).toBe(false);
+    expect(
+      outboundMessageContentSchema.safeParse({
+        ...message,
+        text: "",
+        segments: [{ kind: "mediaRef", mediaId: id }],
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe("buildOneBotSendAction audio", () => {
+  it("sends resolved audio bytes as a NapCat record without storing base64 in the message", () => {
+    const bytes = new Uint8Array([82, 73, 70, 70]);
+    const action = buildOneBotSendAction(
+      { kind: "private", userId: "123" },
+      {
+        kind: "audio",
+        resourceId: `sha256:${"a".repeat(64)}`,
+        mimeType: "audio/wav",
+        byteLength: bytes.byteLength,
+        sha256: "a".repeat(64),
+        text: "你好",
+      },
+      "echo",
+      { media: { bytes, mimeType: "audio/wav", sha256: "a".repeat(64) } },
+    );
+    expect(action.params.message).toEqual([
+      { type: "record", data: { file: "base64://UklGRg==" } },
+    ]);
   });
 });
 
@@ -374,5 +527,85 @@ it("round-trips a marketplace expression with a nonnumeric emoji ID", () => {
       key: "abc123",
       summary: "[表情]",
     },
+  });
+});
+
+describe("ordered inbound media", () => {
+  const options = {
+    adapterId: "qq",
+    now: () => new Date("2026-01-01T00:00:00Z"),
+  };
+  const event = (message: unknown) => ({
+    post_type: "message",
+    message_type: "group",
+    message_id: 1,
+    user_id: 2,
+    group_id: 3,
+    message,
+  });
+
+  it("retains interleaved text and image, market face, and face source positions", () => {
+    const input = normalizeOneBotMessageEvent(
+      event([
+        { type: "text", data: { text: "before" } },
+        {
+          type: "image",
+          data: {
+            file: "x.gif",
+            url: "https://example.test/a",
+            emoji_id: "5",
+            key: "k",
+          },
+        },
+        { type: "text", data: { text: "after" } },
+        {
+          type: "mface",
+          data: { emoji_id: "6", emoji_package_id: 1, key: "k" },
+        },
+        { type: "face", data: { id: 14 } },
+      ]),
+      options,
+    );
+    expect(input?.contentSegments).toEqual([
+      { kind: "text", text: "before" },
+      {
+        kind: "media",
+        position: 1,
+        mediaType: "image",
+        source: {
+          file: "x.gif",
+          url: "https://example.test/a",
+          emoji_id: "5",
+          key: "k",
+        },
+      },
+      { kind: "text", text: "after" },
+      {
+        kind: "media",
+        position: 3,
+        mediaType: "mface",
+        source: { emoji_id: "6", emoji_package_id: "1", key: "k" },
+      },
+      { kind: "media", position: 4, mediaType: "face", source: { id: "14" } },
+    ]);
+  });
+
+  it("retains a pure CQ image and treats escaped CQ text as text", () => {
+    const input = normalizeOneBotMessageEvent(
+      event("[CQ:image,file=x.gif,url=https://example.test/a]"),
+      options,
+    );
+    expect(input?.contentSegments).toEqual([
+      {
+        kind: "media",
+        position: 0,
+        mediaType: "image",
+        source: { file: "x.gif", url: "https://example.test/a" },
+      },
+    ]);
+    expect(
+      normalizeOneBotMessageEvent(event("&#91;CQ:image,file=x&#93;"), options)
+        ?.contentSegments,
+    ).toBeUndefined();
   });
 });

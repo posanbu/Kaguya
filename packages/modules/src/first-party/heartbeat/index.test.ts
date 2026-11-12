@@ -4,8 +4,13 @@
  * 代码库关系：真实数据库和开放槽行为由 observation.test.ts 覆盖；本文件隔离 capability 协议。
  * 入站替身显式提供独立观察发现能力，并验证消费者契约；不将 one-shot 替身误用为观察端口。
  * 输入输出与副作用：只使用固定时钟和模拟回执，不访问模型或平台。
+ * scene 归属通过真实地址及显式候选引用水合；新开放槽使用 sceneIdentity，旧 scope 仍作为索引。
  */
-import { freezeInformationAtom, informationIdSchema } from "@kaguya/schema";
+import {
+  freezeInformationAtom,
+  informationIdSchema,
+  sceneIdentity,
+} from "@kaguya/schema";
 import { observationCapability, type ObservationAccess } from "@kaguya/sdk";
 import {
   oneShotRequestedInformationKind,
@@ -148,7 +153,7 @@ describe("heartbeatModule", () => {
       turnCandidateInformationKind,
       expect.objectContaining({
         openScope: {
-          key: "qq:adapter:group:room",
+          key: sceneIdentity(inbound.payload.source),
           terminalGroup: "agent.router.turn.terminal",
         },
         payload: expect.objectContaining({
@@ -363,7 +368,7 @@ describe("heartbeatModule", () => {
           adapterId: "adapter",
           platform: "qq",
           platformMessageId: "message-2",
-          destination: { kind: "group", groupId: "room" },
+          destination: { kind: "group" as const, groupId: "room" },
           senderId: "user",
         },
       },
@@ -387,7 +392,7 @@ describe("heartbeatModule", () => {
     } as never);
     expect(registerOnce).toHaveBeenCalledWith(
       "agent.heartbeat.candidate",
-      `${state.informationId}:qq:adapter:group:room`,
+      `${state.informationId}:${sceneIdentity(inbound.payload.source)}`,
       turnCandidateInformationKind,
       expect.objectContaining({
         payload: expect.objectContaining({
@@ -430,6 +435,7 @@ describe("heartbeatModule", () => {
       source: "module:arousal.test",
       payload: {
         outcome: "defer",
+        candidateInformationId: "candidate-upper",
         scopeKey: "qq:adapter:group:room",
       },
       references: [],
@@ -460,18 +466,34 @@ describe("heartbeatModule", () => {
       kind: inboundTextInformationKind.kind,
       occurredAt: "2026-09-08T00:00:09.000Z",
       source: "adapter:test",
-      payload: { text: "pending", source: {} },
+      payload: {
+        text: "pending",
+        source: {
+          platform: "qq",
+          adapterId: "adapter",
+          destination: { kind: "group", groupId: "room" },
+        },
+      },
       references: [],
     });
-    const find = vi.fn(async (query: { kinds?: readonly string[] }) => {
-      if (query.kinds?.includes(attentionArousalCompletedInformationKind.kind))
-        return [outcome];
-      if (query.kinds?.includes(turnContextCompletedInformationKind.kind))
+    const find = vi.fn(
+      async (query: {
+        kinds?: readonly string[];
+        informationIds?: readonly string[];
+      }) => {
+        if (query.informationIds?.includes(candidate.informationId))
+          return [candidate];
+        if (
+          query.kinds?.includes(attentionArousalCompletedInformationKind.kind)
+        )
+          return [outcome];
+        if (query.kinds?.includes(turnContextCompletedInformationKind.kind))
+          return [];
+        if (query.kinds?.includes(inboundTextInformationKind.kind))
+          return [inbound];
         return [];
-      if (query.kinds?.includes(inboundTextInformationKind.kind))
-        return [inbound];
-      return [];
-    });
+      },
+    );
     const related = vi.fn(
       async (query: { from: readonly string[]; relation: string }) => {
         if (query.from.includes(outcome.informationId)) return [candidate];

@@ -1,3 +1,8 @@
+/**
+ * 功能概述：声明 native Memory 来源、形成、修订、重试及观察确认的事实契约。
+ * 主要职责：formationSchemaFor 按持久策略选择输出协议，旧请求保持其原 schema 和模型指纹。
+ * 代码库关系：模块生产事实，database 核验其原始来源、冻结输入与完成依据；schema 本身无 I/O。
+ */
 import { memorySourceSchema } from "@kaguya/memory";
 import { personEvidenceSchema, z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
@@ -9,6 +14,7 @@ export const nativeMemoryRequested = defineInformationKind({
     .object({
       batchId: z.string(),
       scope: z.string(),
+      formationPolicy: z.literal("experience-operations.v1").exactOptional(),
       sources: z.array(memorySourceSchema),
       existing: z.record(z.string(), z.json()),
     })
@@ -101,3 +107,74 @@ export const nativeMemoryRetry = defineInformationKind({
   references: { "core:context": { required: true, multiple: false } },
   log: { enabled: false },
 });
+
+export const nativeMemorySource = defineInformationKind({
+  kind: "memory.native.source.v1",
+  displayName: "Memory 正规来源",
+  description: "epoch 后原始证据的持久正规化证明，保留原文及成功投递引用。",
+  payloadSchema: z
+    .object({
+      source: z.record(z.string(), z.json()),
+      text: z.string(),
+      originalInformationId: z.string(),
+      memorySource: memorySourceSchema,
+    })
+    .strict(),
+  references: { "core:uses-context": { required: true, multiple: false } },
+  log: { enabled: false },
+});
+export const nativeMemoryObservationCompleted = defineInformationKind({
+  kind: "memory.native.observation.completed.v1",
+  displayName: "Memory 来源消费完成",
+  description: "以持久成功形成终态确认正规来源页，不越过失败缺口。",
+  payloadSchema: z
+    .object({ observationId: z.string(), operationId: z.string() })
+    .strict(),
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": { required: true, multiple: false },
+    "core:uses-context": { required: true, multiple: true },
+  },
+  log: { enabled: false },
+});
+
+/** 新冻结使用明确经历状态；既有无 cutoff 请求继续使用原 output schema 和模型指纹。 */
+export const revisableFormationOutputSchema = formationOutputSchema.extend({
+  nodes: z
+    .array(
+      formationOutputSchema.shape.nodes.element.extend({
+        experience: z
+          .object({
+            state: z.enum(["open", "sealed"]),
+            policyVersion: z.literal("experience.v1"),
+          })
+          .strict()
+          .optional(),
+      }),
+    )
+    .max(24),
+});
+
+/** 新请求可以提交一次原子经历操作；引用使用旧节点 ID 或本批节点 key。 */
+export const experienceFormationOutputSchema =
+  revisableFormationOutputSchema.extend({
+    experienceOperation: z
+      .object({
+        kind: z.enum(["correct", "seal", "reopen", "merge", "split"]),
+        inputIds: z.array(z.string().min(1)).min(1).max(24),
+        outputIds: z.array(z.string().min(1)).min(1).max(24),
+      })
+      .strict()
+      .optional(),
+  });
+
+/** 以持久冻结字段选择协议；旧 v1 请求永远保持原模型输出 schema。 */
+export function formationSchemaFor(
+  existing: { cutoff?: unknown },
+  formationPolicy?: "experience-operations.v1",
+) {
+  if (formationPolicy) return experienceFormationOutputSchema;
+  return existing.cutoff
+    ? revisableFormationOutputSchema
+    : formationOutputSchema;
+}

@@ -1,4 +1,5 @@
 /**
+ * 碰撞场景回归在第一场景意图尚未投递时打开第二场景，确认独立 claim、意图及无跨场景 supersede。
  * 迟到候选按注册顺序接续已完成回合，事件发生时间只影响语义积压，不倒置候选优先级。
  * 功能概述：通过真实 InformationCore/PGlite 验证先观察再冻结上下文、Light 分派和唯一终态。
  * 主要职责：fixture 安装 Router 与受控模型能力；appendOpportunity/decide 构造通知与观察事实；
@@ -7,9 +8,13 @@
  * 资源取得后立即登记清理；启动拒绝或 stop 失败时仍顺序释放全部资源并汇总错误。
  * 输入输出与副作用：每项测试使用独立数据库并在结束时关闭 Host/Core/数据库，保留精确输入水位与动作断言。
  * 模型替身入口断言观察成功及持久 claim/run 已存在、行动意图尚未创建；观察能力使用真实数据库实现。
+ * 合成输出链验证授权/合成中间节点后的投递终态归属，包括旧式因果链、直接 claim 引用及未知结果。
  */
 import { closeTestResources } from "../test-support/cleanup.js";
-import { observationCapability } from "@kaguya/sdk";
+import {
+  observationCapability,
+  actionRunValidityCapability,
+} from "@kaguya/sdk";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import {
@@ -18,7 +23,7 @@ import {
   ModuleHost,
   executionExhaustedInformationKind,
 } from "@kaguya/engine";
-import { z } from "@kaguya/schema";
+import { z, type SceneAddress, sceneIdentity } from "@kaguya/schema";
 import {
   catalogInformationKinds,
   defineInformationKind,
@@ -68,8 +73,11 @@ const terminal = (kind: string, ok: boolean) =>
     kind,
     displayName: kind,
     description: kind,
-    payloadSchema: z.object({ ok: z.literal(ok) }).strict(),
+    payloadSchema: z
+      .object({ ok: z.literal(ok), outcome: z.literal("unknown").optional() })
+      .strict() as z.ZodType<{ ok: boolean; outcome?: "unknown" }>,
     references: {
+      "core:context": { required: false, multiple: false },
       "core:caused-by": { required: true, multiple: false },
       "core:status-of": { required: true, multiple: false },
     },
@@ -79,6 +87,52 @@ const delivered = terminal("core.delivery.delivered", true);
 const deliveryFailed = terminal("core.delivery.failed", false);
 const modelFailed = terminal("core.model.task.failed", false);
 const modelCancelled = terminal("core.model.task.cancelled", false);
+// 使用中性输出节点隔离 Router 契约；平台编码与真实 TTS schema 由各自模块测试覆盖。
+const outputStage = defineInformationKind({
+  kind: "test.output.stage",
+  displayName: "合成输出阶段",
+  description: "保持因果引用的授权与合成替身。",
+  payloadSchema: z.object({}).strict(),
+  references: {
+    "core:caused-by": { required: true, multiple: false },
+    "core:context": { required: true, multiple: false },
+  },
+  log: { enabled: false },
+});
+const outputRequest = defineInformationKind({
+  kind: "test.output.requested",
+  displayName: "合成投递请求",
+  description: "仅验证 Router 的回合来源与投递终态契约。",
+  payloadSchema: z
+    .object({
+      turn: z
+        .object({
+          candidateInformationId: z.string(),
+          claimInformationId: z.string(),
+          contextInformationId: z.string(),
+        })
+        .strict(),
+      speech: z
+        .object({ continuation: z.string().nullable() })
+        .strict()
+        .optional(),
+    })
+    .strict() as z.ZodType<{
+    turn: {
+      candidateInformationId: string;
+      claimInformationId: string;
+      contextInformationId: string;
+    };
+    speech?: { continuation: string | null };
+  }>,
+  references: {
+    "core:context": { required: true, multiple: false },
+    "core:caused-by": { required: true, multiple: false },
+    "agent:turn-claim": { required: false, multiple: false },
+    "agent:turn-candidate": { required: false, multiple: false },
+  },
+  log: { enabled: false },
+});
 const modelTaskCapability = defineModuleCapability<
   import("../heavy/index.js").ModelTaskCapability
 >("kaguya:model-task", 1);
@@ -151,6 +205,8 @@ async function fixture(
     attentionArousalStateRecordedInformationKind,
   ])
     registry.register(definition);
+  registry.register(outputStage);
+  registry.register(outputRequest);
   let sequence = 0;
   const now = () => new Date(options.now ?? "2026-09-22T08:00:10.000Z");
   const core = new InformationCore({
@@ -166,6 +222,7 @@ async function fixture(
     now,
     capabilities: [
       { capability: observationCapability, value: database.observations },
+      { capability: actionRunValidityCapability, value: database.actions },
       { capability: rawContextCapability, value: database.rawEvents },
       {
         capability: modelTaskCapability,
@@ -204,6 +261,7 @@ async function appendOpportunity(
     identities?: boolean;
     occurredAt?: string[];
     includeLower?: boolean;
+    address?: SceneAddress;
   },
 ) {
   const at = "2026-09-22T08:00:00.000Z";
@@ -213,15 +271,17 @@ async function appendOpportunity(
     payload: { requestId: `request-${options.texts.join("-")}` },
     references: [],
   });
-  const destination = options.group
-    ? { kind: "group" as const, groupId: "room" }
-    : {
-        kind: "web" as const,
-        conversationId: "00000000-0000-4000-8000-000000000001",
-      };
+  const destination =
+    options.address?.destination ??
+    (options.group
+      ? { kind: "group" as const, groupId: "room" }
+      : {
+          kind: "web" as const,
+          conversationId: "00000000-0000-4000-8000-000000000001",
+        });
   const source = {
-    platform: options.group ? "qq" : "web",
-    adapterId: "adapter",
+    platform: options.address?.platform ?? (options.group ? "qq" : "web"),
+    adapterId: options.address?.adapterId ?? "adapter",
     destination,
     senderId: "user",
     selfId: "bot",
@@ -503,6 +563,7 @@ async function all(database: any) {
   });
 }
 
+// 单次状态等待 8s；双阶段用例 25s，双轮加清空 45s，新屏障用例 30s；不重复计算 decide 已确认的 context。
 const PERSISTENCE_WAIT = { timeout: 8000, interval: 20 } as const;
 async function settle(
   database: Awaited<ReturnType<typeof createTestingDatabase>>,
@@ -567,7 +628,7 @@ it("persists the observation and run identity before model execution can create 
   await decide(f.core, opportunity.candidate, "observe");
   await settle(f.database);
   expect(checked).toBe(true);
-});
+}, 25000);
 
 it("freezes before attention and defer does not call Light or advance progress", async () => {
   const { core, database, execute } = await fixture();
@@ -590,7 +651,7 @@ it("freezes before attention and defer does not call Light or advance progress",
     ),
   ).toBe(true);
   expect(execute).not.toHaveBeenCalled();
-});
+}, 25000);
 
 it("freezes exactly the registration-watermark window before observe", async () => {
   const { core, database } = await fixture({
@@ -618,7 +679,7 @@ it("freezes exactly the registration-watermark window before observe", async () 
     opportunity.unread.at(-1)!.informationId,
   );
   await waitFor(database, turnSilentInformationKind.kind);
-});
+}, 25000);
 
 it("processes a later registered opportunity with an earlier event time after a completed turn", async () => {
   const { core, database, execute } = await fixture({
@@ -655,7 +716,7 @@ it("processes a later registered opportunity with an earlier event time after a 
     atoms.filter((atom: any) => atom.kind === "agent.router.turn.superseded"),
   ).toHaveLength(0);
   expect(execute).toHaveBeenCalledTimes(2);
-});
+}, 45000);
 
 it("waits for Identity terminal before freezing the observed batch", async () => {
   const { core, database } = await fixture({
@@ -679,7 +740,7 @@ it("waits for Identity terminal before freezing the observed batch", async () =>
   );
   await waitFor(database, turnContextCompletedInformationKind.kind);
   await decide(core, opportunity.candidate, "observe");
-});
+}, 25000);
 
 it("keeps the earlier frozen input unchanged when attention receives a newer Focus lease", async () => {
   const { core, database } = await fixture({
@@ -741,20 +802,24 @@ it.each([
     { action: "silent", reason: "no-response-needed" },
     turnSilentInformationKind.kind,
   ],
-] as const)("keeps Light ownership of %s", async (action, expectedKind) => {
-  const { core, database } = await fixture({ action });
-  const opportunity = await appendOpportunity(core, {
-    texts: ["planner input"],
-  });
-  await decide(core, opportunity.candidate, "observe");
-  await waitFor(database, expectedKind);
-  if (action.action === "wait")
-    expect(
-      (await all(database)).some(
-        (atom: any) => atom.kind === waitRequestedInformationKind.kind,
-      ),
-    ).toBe(true);
-});
+] as const)(
+  "keeps Light ownership of %s",
+  async (action, expectedKind) => {
+    const { core, database } = await fixture({ action });
+    const opportunity = await appendOpportunity(core, {
+      texts: ["planner input"],
+    });
+    await decide(core, opportunity.candidate, "observe");
+    await waitFor(database, expectedKind);
+    if (action.action === "wait")
+      expect(
+        (await all(database)).some(
+          (atom: any) => atom.kind === waitRequestedInformationKind.kind,
+        ),
+      ).toBe(true);
+  },
+  25000,
+);
 
 it("applies mute after observe and opens Focus only from a direct group signal", async () => {
   const muted = await fixture({ muted: true });
@@ -774,4 +839,275 @@ it("applies mute after observe and opens Focus only from a direct group signal",
     startedAt: "2026-09-22T08:00:10.000Z",
     expiresAt: "2026-09-22T08:02:10.000Z",
   });
-});
+}, 25000);
+
+it.each([false, true])(
+  "preserves work on unrelated input and rejects a persistently invalidated late decision (%s)",
+  async (invalidate) => {
+    let modelEntered = false;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const f = await fixture({
+      beforeExecute: async () => {
+        modelEntered = true;
+        await gate;
+      },
+    });
+    // closeTestResources 按逆序清理，先释放模型屏障，避免失败污染 Host/Core shutdown。
+    clean.push(async () => {
+      release();
+    });
+    const op = await appendOpportunity(f.core, { texts: ["正在处理的任务"] });
+    await decide(f.core, op.candidate, "observe");
+    try {
+      await vi.waitFor(() => expect(modelEntered).toBe(true), PERSISTENCE_WAIT);
+      const turn = (
+        await f.core.select(routerStateSelector, op.candidate.informationId)
+      ).find((a) => a.kind === turnContextCompletedInformationKind.kind)!;
+      const incoming = await f.core.register(inboundTextInformationKind, {
+        occurredAt: new Date().toISOString(),
+        source: "test:interjection",
+        payload: {
+          text: "无关插话",
+          source: {
+            ...(op.inputs[0]!.payload.source as any),
+            platformMessageId: "later",
+          },
+        },
+        references: [
+          { relation: "core:context", informationId: op.context.informationId },
+        ],
+      });
+      if (invalidate) {
+        const s = turn.payload.source as any,
+          d = s.destination;
+        await f.database.actions.invalidateRun(
+          String(turn.payload.claimInformationId),
+          JSON.stringify([
+            s.platform,
+            s.adapterId,
+            d.kind,
+            d.userId ?? d.groupId ?? d.conversationId ?? null,
+          ]),
+          incoming.informationId,
+        );
+      }
+      release();
+      await settle(f.database);
+      const all = await f.database.information.find({
+        kinds: [messageIntentRequestedInformationKind.kind],
+        limit: 100,
+      });
+      expect(all).toHaveLength(invalidate ? 0 : 1);
+      expect(f.execute).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+    }
+  },
+  30000, // 初始化、8s 模型入口、8s 持久清空和资源清理共享总预算。
+);
+
+it("keeps two colliding legacy scopes on independent claims and model decisions", async () => {
+  const f = await fixture();
+  const addresses: SceneAddress[] = [
+    {
+      platform: "a:b",
+      adapterId: "c",
+      destination: { kind: "group", groupId: "d" },
+    },
+    {
+      platform: "a",
+      adapterId: "b:c",
+      destination: { kind: "group", groupId: "d" },
+    },
+  ];
+  expect(scopeOf(addresses[0]!)).toBe(scopeOf(addresses[1]!));
+  const first = await appendOpportunity(f.core, {
+    texts: ["scene A"],
+    group: true,
+    signals: ["mention-self"],
+    address: addresses[0]!,
+  });
+  await decide(f.core, first.candidate, "observe");
+  await vi.waitFor(
+    () => expect(f.execute).toHaveBeenCalledTimes(1),
+    PERSISTENCE_WAIT,
+  );
+  await settle(f.database);
+  const second = await appendOpportunity(f.core, {
+    texts: ["scene B"],
+    group: true,
+    signals: ["mention-self"],
+    address: addresses[1]!,
+  });
+  await decide(f.core, second.candidate, "observe");
+  await vi.waitFor(
+    () => expect(f.execute).toHaveBeenCalledTimes(2),
+    PERSISTENCE_WAIT,
+  );
+  await settle(f.database);
+  const facts = await all(f.database);
+  const claims = facts.filter(
+    (a: any) => a.kind === "agent.router.turn.claimed",
+  );
+  expect(claims).toHaveLength(2);
+  expect(
+    new Set(claims.map((a: any) => a.payload.candidateInformationId)),
+  ).toEqual(
+    new Set([first.candidate.informationId, second.candidate.informationId]),
+  );
+  expect(
+    claims.every(
+      (a: any) =>
+        a.payload.generation === 0 &&
+        a.payload.predecessorTerminalInformationId === null,
+    ),
+  ).toBe(true);
+  for (const opportunity of [first, second]) {
+    const claim = claims.find(
+      (a: any) =>
+        a.payload.candidateInformationId ===
+        opportunity.candidate.informationId,
+    )!;
+    expect(
+      claim.references
+        .filter((r: any) => r.relation === "core:uses-context")
+        .map((r: any) => r.informationId),
+    ).toEqual(opportunity.inputs.map((a) => a.informationId));
+  }
+  expect(
+    facts.filter((a: any) =>
+      [
+        "agent.router.turn.superseded",
+        "agent.router.turn.decision.superseded",
+      ].includes(a.kind),
+    ),
+  ).toHaveLength(0);
+  expect(
+    facts.filter(
+      (a: any) => a.kind === messageIntentRequestedInformationKind.kind,
+    ),
+  ).toHaveLength(2);
+  const turns = facts.filter(
+    (a: any) => a.kind === turnContextCompletedInformationKind.kind,
+  );
+  expect(
+    new Set(turns.map((a: any) => sceneIdentity(a.payload.source))),
+  ).toEqual(new Set(addresses.map(sceneIdentity)));
+  expect((await f.database.information.reliable.health()).exhausted).toBe(0);
+}, 45000); // 设置、两次 8 秒模型入口与 8 秒队列收敛；未交付的原意图仍开放，不用固定 sleep。
+
+it.each([
+  { direct: true, outcome: "delivered", continuation: false },
+  { direct: true, outcome: "failed", continuation: false },
+  { direct: true, outcome: "unknown", continuation: false },
+  { direct: false, outcome: "delivered", continuation: false },
+  { direct: false, outcome: "unknown", continuation: false },
+  { direct: true, outcome: "delivered", continuation: true },
+])(
+  "resolves the output terminal through intermediate stages: %j",
+  async ({ direct, outcome, continuation }) => {
+    const { core, database } = await fixture();
+    const opportunity = await appendOpportunity(core, {
+      texts: ["output chain"],
+    });
+    await decide(core, opportunity.candidate, "observe");
+    const intent = await waitFor(
+      database,
+      messageIntentRequestedInformationKind.kind,
+    );
+    const turn = intent.payload.turn;
+    const contextRef = {
+      relation: "core:context",
+      informationId: opportunity.context.informationId,
+    };
+    let previous = intent;
+    // 模拟 assistant、authorization、合成结果；每个节点只向上一阶段提供因果引用。
+    for (let index = 0; index < 3; index++) {
+      previous = await core.register(outputStage, {
+        occurredAt: "2026-09-22T08:00:10.000Z",
+        source: "test:output",
+        payload: {},
+        references: [
+          contextRef,
+          { relation: "core:caused-by", informationId: previous.informationId },
+        ],
+      });
+    }
+    const request = await core.register(outputRequest, {
+      occurredAt: "2026-09-22T08:00:10.000Z",
+      source: "test:output",
+      payload: {
+        turn,
+        ...(continuation ? { speech: { continuation: "next segment" } } : {}),
+      },
+      references: [
+        contextRef,
+        { relation: "core:caused-by", informationId: previous.informationId },
+        ...(direct
+          ? [
+              {
+                relation: "agent:turn-claim",
+                informationId: turn.claimInformationId,
+              },
+              {
+                relation: "agent:turn-candidate",
+                informationId: turn.candidateInformationId,
+              },
+            ]
+          : []),
+      ],
+    });
+    const receipt = await core.register(
+      outcome === "delivered" ? delivered : deliveryFailed,
+      {
+        occurredAt: "2026-09-22T08:00:10.000Z",
+        source: "test:transport",
+        payload: {
+          ok: outcome === "delivered",
+          ...(outcome === "unknown" ? { outcome: "unknown" as const } : {}),
+        },
+        references: [
+          contextRef,
+          { relation: "core:caused-by", informationId: request.informationId },
+          { relation: "core:status-of", informationId: request.informationId },
+        ],
+      },
+    );
+    await settle(database);
+    expect((await database.information.reliable.health()).exhausted).toBe(0);
+    const terminals = (await all(database)).filter(
+      (atom: any) =>
+        ["agent.router.turn.completed", "agent.router.turn.failed"].includes(
+          atom.kind,
+        ) &&
+        atom.payload.candidateInformationId ===
+          opportunity.candidate.informationId,
+    );
+    expect(terminals).toHaveLength(continuation ? 0 : 1);
+    if (!continuation) {
+      expect(terminals[0]).toMatchObject({
+        kind:
+          outcome === "delivered"
+            ? "agent.router.turn.completed"
+            : "agent.router.turn.failed",
+        payload: {
+          candidateInformationId: turn.candidateInformationId,
+          claimInformationId: turn.claimInformationId,
+          deliveryTerminalInformationId: receipt.informationId,
+          ...(outcome === "delivered"
+            ? {}
+            : {
+                reason:
+                  outcome === "unknown"
+                    ? "delivery-unknown"
+                    : "delivery-failed",
+              }),
+        },
+      });
+    }
+  },
+  25000,
+);

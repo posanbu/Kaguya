@@ -1,3 +1,8 @@
+/**
+ * 功能概述：验证 Heavy 补查的持久去重、跨表达段预算及冻结知识上界。
+ * 主要职责：新快照传递 cutoff；历史无上界快照复用原正文，不向当前 Memory 补读。
+ * 代码库关系：仅使用模块处理器与内存账本替身，不调用外部模型。
+ */
 import { describe, it, expect, vi } from "vitest";
 import {
   nativeMemoryCapability,
@@ -56,10 +61,11 @@ const completedKind = defineInformationKind({
   log: { enabled: false },
 });
 const activation = { instanceId: "heavy.test", definitionId: "agent.heavy" };
-const snapshot = () =>
+const snapshot = (legacy = false) =>
   nativeMemorySnapshotSchema.parse({
     version: 1,
     status: "enabled",
+    ...(legacy ? {} : { cutoff: { publicationPosition: "17" } }),
     frozenAt: "2026-09-09T00:00:03.000Z",
     scope: "group-a",
     owners: ["person:a"],
@@ -69,7 +75,7 @@ const snapshot = () =>
     budget: { dynamicCharacters: 0, omittedNodeIds: [] },
   });
 type Atom = DeepReadonly<InformationAtom>;
-async function harness() {
+async function harness(legacy = false) {
   const f = fixture();
   const saved = new Map<string, Atom>(f.atoms.map((a) => [a.informationId, a]));
   const registered = new Map<string, Atom>();
@@ -79,7 +85,7 @@ async function harness() {
     requestedInformationId: "unused",
     terminalInformationId: "unused",
   }));
-  const recall = vi.fn(async () => snapshot());
+  const recall = vi.fn(async (_input: unknown) => snapshot());
   const memory = { enabled: true, recall };
   const definition = createHeavyModule({
     modelTaskCapability: token,
@@ -188,7 +194,7 @@ async function harness() {
     variables: [
       {
         name: "native_memory",
-        content: JSON.stringify(snapshot()),
+        content: JSON.stringify(snapshot(legacy)),
         informationIds: ["frozen"],
       },
     ],
@@ -246,6 +252,20 @@ async function harness() {
   };
 }
 describe("Heavy durable recall", () => {
+  it("reuses historical frozen text without consulting live Memory", async () => {
+    const h = await harness(true);
+    await h.complete(h.request(h.f.intent), {
+      action: "recall",
+      query: "旧输入",
+      candidateIds: [],
+    });
+    await h.handle(h.all(memoryRecallRequested.kind)[0]!);
+    expect(h.recall).not.toHaveBeenCalled();
+    expect(h.all(memoryRecallCompleted.kind)).toHaveLength(1);
+    expect(h.all(memoryRecallCompleted.kind)[0]!.payload.snapshot).toEqual(
+      snapshot(true),
+    );
+  });
   it("persists one result, reuses it on replay, and shares two calls across speech segments", async () => {
     const h = await harness();
     await h.complete(h.request(h.f.intent), {
@@ -259,6 +279,9 @@ describe("Heavy durable recall", () => {
     await h.handle(first);
     await h.handle(first);
     expect(h.recall).toHaveBeenCalledTimes(1);
+    expect(h.recall.mock.calls[0]![0]).toMatchObject({
+      cutoff: { publicationPosition: "17" },
+    });
     const firstResult = h.all(memoryRecallCompleted.kind)[0]!;
     h.recall.mockRejectedValueOnce(new Error("must not run on result replay"));
     await h.handle(firstResult);

@@ -30,7 +30,11 @@ import {
   createRepeatingDeterministicModel,
 } from "@kaguya/llm/testing";
 import { createLogger, closeLogger } from "@kaguya/logger";
-import { z } from "@kaguya/schema";
+import { z, nativeMemorySnapshotSchema } from "@kaguya/schema";
+import {
+  formationOutputSchema,
+  formationSchemaFor,
+} from "../../modules/src/first-party/memory-native/facts.js";
 import {
   defineInformationKind,
   defineInformationModule,
@@ -394,6 +398,74 @@ for (const backend of ["PGlite", "PostgreSQL"] as const) {
   describe.skipIf(backend === "PostgreSQL" && !pgUrl)(
     `${backend} Model Task persistence windows`,
     () => {
+      it("replays a legacy Memory v1 schema and frozen prompt without changing the model request identity", async () => {
+        const provider = createRepeatingDeterministicModel({
+          nodes: [],
+          edges: [],
+        });
+        const f = await fixture(backend, provider);
+        const legacy = {
+          version: 1 as const,
+          status: "enabled" as const,
+          frozenAt: "2026-09-06T00:00:00Z",
+          scope: "legacy",
+          owners: [],
+          people: [],
+          participants: [],
+          fixed: [],
+          recalled: [],
+          degraded: [],
+          budget: { dynamicCharacters: 0, omittedNodeIds: [] },
+        };
+        const raw = JSON.stringify(legacy);
+        const request = {
+          ...f.request,
+          task: {
+            ...f.request.task,
+            taskId: "memory.native.form",
+            outputSchema: formationOutputSchema,
+          },
+          prompt: {
+            ...f.request.prompt,
+            text: raw,
+            variables: [
+              {
+                name: "context",
+                content: raw,
+                informationIds: [f.request.sourceInformationId],
+              },
+            ],
+          },
+        };
+        const result = await f.client.execute(request);
+        expect(result.status).toBe("completed");
+        const requestedBefore = (await f.atoms()).find(
+          (a) => a.kind === "core.model.task.requested",
+        )!;
+        const replacement = createRepeatingDeterministicModel({
+          nodes: [],
+          edges: [],
+        });
+        await f.restart(replacement);
+        const restored = nativeMemorySnapshotSchema.parse(JSON.parse(raw));
+        expect(JSON.stringify(restored)).toBe(raw);
+        expect(formationSchemaFor(restored)).toBe(formationOutputSchema);
+        expect(
+          await f.client.execute({
+            ...request,
+            task: {
+              ...request.task,
+              outputSchema: formationSchemaFor(restored),
+            },
+          }),
+        ).toEqual(result);
+        expect(
+          (await f.atoms()).find((a) => a.kind === "core.model.task.requested"),
+        ).toEqual(requestedBefore);
+        expect(provider.doGenerateCalls).toHaveLength(1);
+        expect(replacement.doGenerateCalls).toHaveLength(0);
+      });
+
       it("starts Runtime without registering retired core.llm kinds", async () => {
         const f = await fixture(backend);
         expect(

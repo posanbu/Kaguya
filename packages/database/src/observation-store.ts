@@ -6,6 +6,9 @@
  * 代码库关系：复用 InformationRepository 的 scope advisory lock 和 lifecycle.position；经 SDK capability 暴露。
  * 输入输出与副作用：执行参数化 SQL 与行锁；stream 契约不可静默更改，来源页上限只推进实际冻结上界。
  */
+import { nativeMemorySnapshotSchema } from "@kaguya/schema";
+import { canonicalMemorySourceId } from "@kaguya/memory";
+import { readMemoryView } from "./native-memory-history.js";
 import { randomUUID } from "node:crypto";
 import {
   z,
@@ -116,6 +119,11 @@ export class PostgresObservationStore implements ObservationAccess {
     raw: ObservationFreezeInput,
   ): Promise<ObservationSnapshot | undefined> {
     const input = observationFreezeSchema.parse(raw);
+    if (
+      input.consumerId === "memory.native" &&
+      input.manifest?.proofKind !== "memory-native"
+    )
+      throw new ObservationConflictError();
     const contract = normalize({
       consumerId: input.consumerId,
       policyVersion: input.policyVersion,
@@ -200,6 +208,14 @@ export class PostgresObservationStore implements ObservationAccess {
           (row) => available.has(row.information_id) !== first,
         );
         if (boundary > 0) page = page.slice(0, boundary);
+        // Memory 批次至多 24 条且正规注册次序可异于旧队列；无证明缺口逐来源分配，
+        // 后继批次才能分别替换，不要求某一批包含整个积压范围。Situation 保持原分页语义。
+        if (
+          contract.consumerId === "memory.native" &&
+          input.manifest?.proofKind === "memory-native" &&
+          !first
+        )
+          page = page.slice(0, 1);
       }
       const complete =
         !available || page.every((row) => available.has(row.information_id));
@@ -252,6 +268,8 @@ export class PostgresObservationStore implements ObservationAccess {
     contract: ObservationSnapshot["contract"],
     manifest: ObservationManifest,
   ): Promise<Set<string>> {
+    if (manifest.proofKind === "memory-native")
+      return this.validateMemoryManifest(tx, contract, manifest);
     const filter = {
       ...contract.address,
       ...(contract.senderId ? { senderId: contract.senderId } : {}),
@@ -335,6 +353,12 @@ export class PostgresObservationStore implements ObservationAccess {
       })
       .safeParse(manifest.content);
     if (!content.success) throw new ObservationConflictError();
+    const frozenMemory = (manifest.content as any).memory;
+    if (
+      frozenMemory?.cutoff?.publicationPosition !==
+      manifest.knowledgeCutoff.memoryPublicationPosition
+    )
+      throw new ObservationConflictError();
     const memory = content.data.memory;
     const revisions = new Map<string, number>();
     for (const n of [
@@ -357,6 +381,135 @@ export class PostgresObservationStore implements ObservationAccess {
     return new Set(
       inputs.map((i) => i.informationId).filter((id) => evidence.has(id)),
     );
+  }
+  private async validateMemoryManifest(
+    tx: SqlTransaction,
+    contract: ObservationSnapshot["contract"],
+    manifest: ObservationManifest,
+  ): Promise<Set<string>> {
+    if (
+      contract.consumerId !== "memory.native" ||
+      contract.policyVersion !== "native-formation.v1" ||
+      contract.resultKind !== "memory.native.observation.completed.v1" ||
+      contract.kinds.length !== 1 ||
+      contract.kinds[0] !== "memory.native.source.v1" ||
+      manifest.runInformationId !== manifest.frozenInformationId ||
+      manifest.knowledgeCutoff.informationId !== manifest.frozenInformationId
+    )
+      throw new ObservationConflictError();
+    const row = (
+      await tx.query<{
+        payload: {
+          batchId: string;
+          sources: { id: string }[];
+          existing: unknown;
+        };
+      }>(
+        `SELECT a.payload FROM information_atoms a JOIN memory_native_batches b ON b.id::text=a.payload->>'batchId'
+      WHERE a.information_id=$1 AND a.kind='memory.native.formation.requested.v1' AND a.payload=$2::jsonb AND jsonb_array_length(a.payload->'sources')=jsonb_array_length(b.sources) AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(a.payload->'sources') requested WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(b.sources) stored WHERE stored @> requested))`,
+        [manifest.frozenInformationId, JSON.stringify(manifest.content)],
+      )
+    ).rows[0];
+    if (!row) throw new ObservationConflictError();
+    const frozen = nativeMemorySnapshotSchema.parse(row.payload.existing);
+    if (
+      frozen.cutoff?.publicationPosition !==
+      manifest.knowledgeCutoff.memoryPublicationPosition
+    )
+      throw new ObservationConflictError();
+    const scope = JSON.stringify([
+      contract.address.platform,
+      contract.address.adapterId,
+      contract.address.destination.kind,
+      "userId" in contract.address.destination
+        ? contract.address.destination.userId
+        : "groupId" in contract.address.destination
+          ? contract.address.destination.groupId
+          : (contract.address.destination.conversationId ?? null),
+    ]);
+    if (frozen.scope !== scope) throw new ObservationConflictError();
+    const ids = row.payload.sources.map((s) => canonicalMemorySourceId(s.id));
+    const canonical = (value: unknown) => JSON.stringify(value);
+    if (
+      canonical([...ids].sort()) !==
+      canonical([...manifest.sourceInformationIds].sort())
+    )
+      throw new ObservationConflictError();
+    const rows = (
+      await tx.query<{
+        information_id: string;
+        source: {
+          ownerId: string;
+          participants?: { ownerId: string | null }[];
+        };
+      }>(
+        `SELECT a.information_id,s.source FROM information_atoms a
+      JOIN information_lifecycle l USING(information_id)
+      JOIN memory_native_sources s ON s.id=a.payload->>'originalInformationId'
+      JOIN information_lifecycle original ON original.information_id=s.id, memory_native_epoch e
+      WHERE a.information_id=ANY($1::text[]) AND a.kind='memory.native.source.v1'
+      AND a.payload->'memorySource'=s.source AND a.payload->'source'=$2::jsonb
+      AND original.position>e.source_after`,
+        [ids, JSON.stringify(contract.address)],
+      )
+    ).rows;
+    if (rows.length !== ids.length) throw new ObservationConflictError();
+    const nodes = [...frozen.fixed, ...frozen.recalled.map((r) => r.node)];
+    const view = frozen.cutoff
+      ? await readMemoryView(tx, frozen.cutoff.publicationPosition, {
+          ids: nodes.map((n) => n.id),
+        })
+      : undefined;
+    // 授权来自正规来源，不能由调用方填写的 frozen.owners 扩大。
+    const owners = new Set([
+      `conversation:${scope}`,
+      "self:kaguya",
+      "expression:kaguya",
+      ...rows.flatMap((r) => [
+        r.source.ownerId,
+        ...(r.source.participants ?? []).flatMap((p) =>
+          p.ownerId ? [p.ownerId] : [],
+        ),
+      ]),
+    ]);
+    if (frozen.owners.some((owner) => !owners.has(owner)))
+      throw new ObservationConflictError();
+    for (const n of nodes) {
+      if (
+        !owners.has(n.metadata.ownerId) ||
+        !(
+          n.metadata.scope === scope ||
+          (n.metadata.scope === "shared" &&
+            ["person", "self", "expression"].includes(n.metadata.kind))
+        )
+      )
+        throw new ObservationConflictError();
+      if (view) {
+        if (canonical(view.nodes.get(n.id)) !== canonical(n))
+          throw new ObservationConflictError();
+      } else if (
+        !(
+          await tx.query(
+            "SELECT 1 FROM memory_native_publications p CROSS JOIN LATERAL jsonb_array_elements(p.nodes) n(node) WHERE n.node=$1::jsonb LIMIT 1",
+            [JSON.stringify(n)],
+          )
+        ).rowCount
+      )
+        throw new ObservationConflictError();
+    }
+    const revisions = nodes
+      .map((n) => ({ id: n.id, revision: n.metadata.revision }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    if (
+      canonical(revisions) !==
+      canonical(
+        [...manifest.knowledgeCutoff.memoryRevisions].sort((a, b) =>
+          a.id.localeCompare(b.id),
+        ),
+      )
+    )
+      throw new ObservationConflictError();
+    return new Set(ids);
   }
   async finish(id: string, result: string): Promise<ObservationSnapshot> {
     informationIdSchema.parse(result);
@@ -383,6 +536,23 @@ export class PostgresObservationStore implements ObservationAccess {
         [result, current.contract.resultKind, id],
       );
       if (!resultAtom.rowCount) throw new ObservationConflictError();
+      if (
+        current.consumerId === "memory.native" &&
+        current.manifest?.proofKind !== "memory-native"
+      )
+        throw new ObservationConflictError();
+      if (current.manifest?.proofKind === "memory-native") {
+        const success = await tx.query(
+          `SELECT 1 FROM information_atoms proof
+          JOIN information_references ref ON ref.information_id=proof.information_id AND ref.relation='core:uses-context'
+          JOIN information_atoms result ON result.information_id=ref.target_information_id
+          WHERE proof.information_id=$1 AND result.kind='memory.native.formation.completed.v1'
+          AND result.payload->>'status'='completed'
+          AND EXISTS(SELECT 1 FROM information_references r WHERE r.information_id=result.information_id AND r.relation='core:status-of' AND r.target_information_id=$2)`,
+          [result, current.manifest.frozenInformationId],
+        );
+        if (!success.rowCount) throw new ObservationConflictError();
+      }
       // 成功依据必须直接引用全部来源和补充版本，不能用任意旧原子确认范围。
       const evidence = await tx.query<{ target_information_id: string }>(
         `SELECT target_information_id FROM information_references WHERE information_id=$1`,
@@ -563,6 +733,11 @@ export class PostgresObservationStore implements ObservationAccess {
         !previous.sourceInformationIds.every((source) =>
           manifest.sourceInformationIds.includes(source),
         )
+      )
+        throw new ObservationConflictError();
+      if (
+        previous.consumerId === "memory.native" &&
+        manifest.proofKind !== "memory-native"
       )
         throw new ObservationConflictError();
       const available = await this.validateManifest(

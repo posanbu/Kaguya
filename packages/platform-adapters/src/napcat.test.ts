@@ -208,7 +208,7 @@ it("supports an action client and adapter sharing one transport", async () => {
   await adapter.stop();
 });
 
-it("returns a failed receipt when a NapCat action times out", async () => {
+it("returns an unknown receipt when a NapCat action times out", async () => {
   const transport = new FakeTransport();
   const client = new NapCatActionClient({
     adapterId: "napcat.qq.main",
@@ -226,11 +226,12 @@ it("returns a failed receipt when a NapCat action times out", async () => {
     ok: false,
     adapterId: "napcat.qq.main",
     target: { kind: "group", groupId: "778899" },
+    outcome: "unknown",
     error: "NapCat action timed out",
   });
 });
 
-it("returns failed receipts when the NapCat transport closes", async () => {
+it("returns unknown receipts when the NapCat transport closes", async () => {
   const transport = new FakeTransport();
   const client = new NapCatActionClient({
     adapterId: "napcat.qq.main",
@@ -248,6 +249,7 @@ it("returns failed receipts when the NapCat transport closes", async () => {
   await expect(receiptPromise).resolves.toMatchObject({
     ok: false,
     target: { kind: "private", userId: "112233" },
+    outcome: "unknown",
     error: "NapCat connection closed",
   });
 });

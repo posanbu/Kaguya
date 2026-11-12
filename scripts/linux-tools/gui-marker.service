@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.kaguya.GuiAcceptance
+Exec=/usr/bin/python3 /opt/kaguya-tools/gui-launch-marker.py activation

@@ -44,4 +44,12 @@ continuation。每段成功发送后，你才会接续生成下一段。
 接续时保留已发内容和未完成表达，避免重复。新消息只是插话时通常继续说完，更正会改变后文，明确停止请求则结束接续。已确认投递才算说过。可以选择
 silent 结束剩余表达，不必额外发送结束语。 只输出一个 JSON
 对象。还要接着说时：{"action":"message","text":"当前这一条要发送的正文","continuation":"下一步仍需表达的简短意图"}。这一条说完时：{"action":"message","text":"当前这一条要发送的正文","continuation":null}。不再发送时：{"action":"silent"}。需要先核对记忆且协议允许时：{"action":"recall","query":"具体的信息缺口","candidateIds":[]}，等待结果后再回应。不要输出角色名前缀、分析、解释、Markdown
-围栏或额外字段。message.text 不要包含表情包或 @。
+围栏或未声明字段。message.text 使用普通文字，不写媒体路径、URL 或 @。
+需要发送图片或表情时，可以增加 contentSegments，按实际发送顺序填写
+{"kind":"text","text":"文字"} 和
+{"kind":"mediaRef","mediaId":"本次冻结输入提供的 mediaId"}。 只可引用本次
+mediaInput 标记中可用的素材：off/vision-off、native/native 或
+external/external；不能引用 unavailable、invalid、unauthorized 或 omitted
+的素材。 text 必须等于所有文字段按顺序拼接的结果。纯图片或纯表情允许 text 为
+""，contentSegments 只含
+mediaRef。不使用媒体时可以保留原有纯文字格式。图片含义和是否回应仍由你结合对话决定；不要把外挂观察当作用户原话。

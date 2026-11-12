@@ -1,0 +1,12 @@
+description: 回复节奏离线请求预览，复用生产 Light/Heavy 编译器，不调用模型。
+prompts:
+  - "preview {{caseId}}"
+providers:
+  - id: file://reply-rhythm-provider.cjs
+tests: file://reply-rhythm-cases.json
+defaultTest:
+  assert:
+    - type: javascript
+      value: "JSON.parse(output).requests.light.prompt.length > 0 && JSON.parse(output).requests.heavy.prompt.length > 0 && context.providerResponse.metadata.networkRequests === 0"
+evaluateOptions:
+  maxConcurrency: 1

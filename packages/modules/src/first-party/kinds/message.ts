@@ -1,20 +1,18 @@
 /**
+ * 出站助手保留有序 text/mediaRef 段和冻结模型请求 ID，由输出模块透传并由 Runtime 校验实际来源。
+ * 入站有序 contentSegments 只保存稳定媒体引用；临时 URL 与字节不进入消息事实。
  * 可选草稿与结构化表情是展示插件扩展点；assistant 保留原目标、回合和来源因果链。
  * 功能概述：message 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
  * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
- * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
- * 输入输出与副作用：消息和记忆正文仅经 shared.contentPreview 生成脱敏、限长的日志字段；
- * coreMemoryTextInformationKind 的正文仍只在原有 debug 等级投影，不改变记忆载荷或写回流程。
- */
-/**
- * 可选草稿与结构化表情是展示插件扩展点；assistant 保留原目标、回合和来源因果链。
- * 功能概述：message 领域的 Information schema 与不可变定义，独立维护本领域引用和日志投影。
- * 主要职责：下列 schema 校验入账载荷，各 kind 声明因果关系、上下文和诊断元数据；无 I/O。
+ * Heavy 静默事实只允许模型完成或一次性定时到期作为直接原因，过期分段仍须携带意图、回合和上下文引用。
  * 代码库关系：information-kinds.ts 稳定重导出公共对象；跨领域只复用相邻文件定义，保持 Registry 对象身份。
  * 输入输出与副作用：消息和记忆正文仅经 shared.contentPreview 生成脱敏、限长的日志字段；
  * coreMemoryTextInformationKind 的正文仍只在原有 debug 等级投影，不改变记忆载荷或写回流程。
  */
 import {
+  mediaContentSegmentsSchema,
+  outboundContentSegmentsSchema,
+  type OutboundContentSegment,
   outboundMessageContentSchema,
   outboundExpressionSchema,
   type OutboundExpression,
@@ -60,8 +58,16 @@ export const speechStepSchema = z
 export type SpeechStep = z.infer<typeof speechStepSchema>;
 
 export const inboundTextInformationPayloadSchema = z
-  .object({ text: z.string(), source: messageSourceSchema })
-  .strict();
+  .object({
+    text: z.string(),
+    source: messageSourceSchema,
+    contentSegments: mediaContentSegmentsSchema.optional(),
+  })
+  .strict() as z.ZodType<{
+  text: string;
+  source: z.infer<typeof messageSourceSchema>;
+  contentSegments?: z.infer<typeof mediaContentSegmentsSchema>;
+}>;
 
 const messageIntentShape = {
   target: messageTargetSchema,
@@ -166,7 +172,7 @@ export const heavyResponseSilentInformationKind = defineInformationKind({
   kind: "agent.heavy.response.silent",
   displayName: "Heavy 决定静默",
   description:
-    "Heavy 阅读冻结原始对话后放弃本次发言；Router 据此闭合回合，不产生助手消息或投递。",
+    "Heavy 读取冻结对话后决定静默，或待发送分段在定时到期后失效；Router 据此闭合回合，不产生助手消息或投递。",
   payloadSchema: z
     .object({
       intentInformationId: nonBlankString,
@@ -182,7 +188,7 @@ export const heavyResponseSilentInformationKind = defineInformationKind({
     "core:caused-by": {
       required: true,
       multiple: false,
-      targetKinds: ["core.model.task.completed"],
+      targetKinds: ["core.model.task.completed", "core.schedule.one-shot.due"],
     },
     "core:context": {
       required: true,
@@ -267,14 +273,39 @@ export const assistantTextInformationKind = defineInformationKind({
           platformMessageId?: string;
         }
       >,
+      contentSegments: outboundContentSegmentsSchema.optional(),
+      mediaRequestInformationId: nonBlankString.optional(),
       expression: outboundExpressionSchema.optional(),
       originatingModuleInstanceId: nonBlankString,
       turn: turnProvenanceSchema.nullable(),
       speech: speechStepSchema.optional(),
     })
-    .strict() as z.ZodType<{
+    .strict()
+    .superRefine((payload, context) => {
+      if (!!payload.contentSegments !== !!payload.mediaRequestInformationId)
+        context.addIssue({
+          code: "custom",
+          message: "Ordered content requires its frozen model request",
+          path: ["mediaRequestInformationId"],
+        });
+      if (
+        payload.contentSegments &&
+        payload.text !==
+          payload.contentSegments
+            .filter((part) => part.kind === "text")
+            .map((part) => part.text)
+            .join("")
+      )
+        context.addIssue({
+          code: "custom",
+          message: "Assistant text must match ordered text segments",
+          path: ["text"],
+        });
+    }) as z.ZodType<{
     text: string;
     source: MessageTarget & { selfId?: string; platformMessageId?: string };
+    contentSegments?: OutboundContentSegment[];
+    mediaRequestInformationId?: string;
     expression?: OutboundExpression;
     originatingModuleInstanceId: string;
     turn: z.infer<typeof turnProvenanceSchema> | null;
@@ -312,6 +343,33 @@ export const assistantTextInformationKind = defineInformationKind({
   },
 });
 
+/** Heavy 完成授权后的唯一输出接管点。输出插件只能从这里选择文字或媒体分支。 */
+export const authorizedAssistantOutputInformationKind = defineInformationKind({
+  kind: "core.message.assistant.authorized",
+  displayName: "已授权的助手输出",
+  description:
+    "正文通过目标授权后的稳定输出事实；默认文字模块或一个独立输出插件消费它，避免并行重复发送。",
+  payloadSchema: assistantTextInformationKind.payloadSchema,
+  references: {
+    "core:caused-by": {
+      required: true,
+      multiple: false,
+      targetKinds: [assistantTextInformationKind.kind],
+    },
+    "core:context": {
+      required: true,
+      multiple: false,
+      targetKinds: ["core.runtime.context"],
+    },
+  },
+  log: { enabled: false },
+});
+
+/** 同一装配只能启用一个已授权输出处理器。 */
+export const messageOutputProcessorReady = defineModuleCapability<{
+  readonly ready: true;
+}>("agent:message-output-processor", 1);
+
 const deliveryRequestedPayloadSchema = z
   .object({
     adapterId: nonBlankString,
@@ -346,6 +404,10 @@ export const deliveryRequestedInformationKind = defineInformationKind({
       required: true,
       multiple: false,
       targetKinds: ["core.runtime.context"],
+    },
+    "core:result": {
+      required: false,
+      multiple: false,
     },
     "agent:turn-claim": {
       required: false,

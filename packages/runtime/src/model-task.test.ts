@@ -1,4 +1,6 @@
 /**
+ * 媒体准备回归检查实际 provider messages、持久 requested 与重放；Light 不能触发准备回调。
+ * 外挂视觉按 AI SDK 7 的 file 数据段核对 MIME、原帧字节与消息顺序，复用断言仍检查唯一持久请求。
  * 功能概述：用真实 Core/PGlite 验证通用 Model Task 的身份、输出校验和唯一终态。
  * 主要职责：fixture 创建隔离账本；用不同任务 schema 检查去重、预检、取消及 claim fencing。
  * 代码库关系：消费 model-task 与 information-kinds；transform 测试组合真实 KaguyaLlmClient
@@ -8,6 +10,7 @@
  * 输入输出与副作用：只写测试数据库；敏感字符串是泄漏探针；每例关闭 Core 与数据库。
  * 并发/取消用例等待真实 provider 调用出现，统一使用有界轮询，不依赖 runner 的短默认等待。
  */
+import { createMediaVisionObserver } from "./media-vision.js";
 import { createTestingDatabase } from "@kaguya/database/testing";
 import { InformationCore, InformationKindRegistry } from "@kaguya/engine";
 import { KaguyaLlmClient, KaguyaLlmError } from "@kaguya/llm/client";
@@ -1045,4 +1048,112 @@ it("persists native input before dispatch and restores the same native return on
     (a) => a.kind === "core.model.task.completed",
   )!;
   expect(completed.payload.native).toEqual(native);
+});
+
+it("prepares media only for new Heavy requests and retains actual image messages on replay", async () => {
+  const f = await fixture();
+  const media = [
+    {
+      role: "user" as const,
+      content: [{ type: "image", image: "data:image/png;base64,synthetic" }],
+    },
+  ];
+  const prepareMedia = vi.fn(async () => media);
+  const client = new ModelTaskClient({ ...f.options, prepareMedia });
+  const heavy = await client.execute(f.request);
+  expect(heavy.status).toBe("completed");
+  expect(prepareMedia).toHaveBeenCalledTimes(1);
+  expect(
+    (f.generate.mock.calls as unknown as [{ messages: unknown }][])[0]![0]
+      .messages,
+  ).toEqual(expect.arrayContaining(media));
+  const requested = (await f.atoms()).find(
+    (a) => a.informationId === heavy.requestedInformationId,
+  )!;
+  expect(requested.payload.messages).toEqual(expect.arrayContaining(media));
+  const newPreparation = vi.fn(async () => {
+    throw new Error("must reuse frozen media");
+  });
+  expect(
+    await new ModelTaskClient({
+      ...f.options,
+      prepareMedia: newPreparation,
+    }).execute(f.request),
+  ).toEqual(heavy);
+  expect(newPreparation).not.toHaveBeenCalled();
+  await client.execute({
+    ...f.request,
+    task: {
+      ...f.request.task,
+      taskId: "test.light-media",
+      allowedTiers: ["light"],
+    },
+    selectionPolicy: { tier: "light" },
+  });
+  expect(prepareMedia).toHaveBeenCalledTimes(1);
+});
+
+it("executes external vision through durable ModelTask and reuses the completed observation", async () => {
+  const f = await fixture();
+  const generate = vi.fn().mockResolvedValue({
+    output: { description: "a synthetic pixel" },
+    durationMs: 1,
+  });
+  const options = {
+    ...f.options,
+    client: { generate } as Pick<KaguyaLlmClient, "generate">,
+  };
+  const observe = createMediaVisionObserver(
+    f.core,
+    f.db.mediaSources,
+    "scope-A",
+    options,
+    f.request,
+  );
+  const input = {
+    key: "outer-one",
+    mediaId: "media:synthetic",
+    frames: [
+      {
+        bytes: Buffer.from("synthetic-pixel"),
+        mimeType: "image/png" as const,
+        atMs: 0,
+      },
+    ],
+  };
+  const first = await observe(input, new AbortController().signal);
+  expect(first.text).toBe("a synthetic pixel");
+  expect(generate).toHaveBeenCalledTimes(1);
+  expect(generate.mock.calls[0]).toEqual([
+    expect.objectContaining({
+      messages: expect.arrayContaining([
+        {
+          role: "user",
+          content: [
+            expect.objectContaining({ type: "text" }),
+            {
+              type: "file",
+              mediaType: "image/png",
+              data: {
+                type: "data",
+                data: input.frames[0]!.bytes.toString("base64"),
+              },
+            },
+          ],
+        },
+      ]),
+    }),
+  ]);
+  const second = await observe(
+    { ...input, key: "outer-two" },
+    new AbortController().signal,
+  );
+  expect(second).toEqual(first);
+  expect(generate).toHaveBeenCalledTimes(1);
+  const tasks = (await f.atoms()).filter(
+    (a) =>
+      a.kind === "core.model.task.requested" &&
+      a.payload.taskId === "agent.media.describe",
+  );
+  expect(tasks).toHaveLength(1);
 });

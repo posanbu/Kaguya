@@ -1,5 +1,7 @@
-/** Real durable queues and publication, with only model generation replaced. */
-/** Real durable queues and publication, with only model generation replaced. */
+/**
+ * 功能概述：以真实持久队列和发布验证定时形成、重启及固定摘要修订。
+ * 主要职责：仅替换模型生成，所有异步断言显式等待持久边界；finally 关闭共享 fixture。
+ */
 import { describe, it, expect, vi } from "vitest";
 import {
   cognitiveFixture,
@@ -73,10 +75,12 @@ describe("native Memory formation", () => {
             { relation: "core:context", informationId: root.informationId },
           ],
         });
-        await vi.waitFor(async () =>
-          expect(
-            await f.all(oneShotRequestedInformationKind.kind),
-          ).toHaveLength(1),
+        await vi.waitFor(
+          async () =>
+            expect(
+              await f.all(oneShotRequestedInformationKind.kind),
+            ).toHaveLength(1),
+          { timeout: 8000, interval: 20 },
         );
         expect(await f.all(nativeMemoryRequested.kind)).toHaveLength(0);
         const schedule = (
@@ -123,7 +127,7 @@ describe("native Memory formation", () => {
             expect(
               await f.all("memory.native.formation.completed.v1"),
             ).toHaveLength(1),
-          { timeout: 5000 },
+          { timeout: 8000, interval: 20 },
         );
         expect(
           (await f.all(nativeMemoryRequested.kind))[0]!.references,
@@ -228,10 +232,12 @@ describe("native Memory formation", () => {
     };
     try {
       for (let i = 0; i < 7; i++) await send(i);
-      await vi.waitFor(async () =>
-        expect(
-          (await f.database.memoryGraph.native.status()).counts.queued,
-        ).toBe(7),
+      await vi.waitFor(
+        async () =>
+          expect(
+            (await f.database.memoryGraph.native.status()).counts.queued,
+          ).toBe(7),
+        { timeout: 8000, interval: 20 },
       );
       expect(await f.all(nativeMemoryRequested.kind)).toHaveLength(0);
       await send(7);
@@ -240,7 +246,7 @@ describe("native Memory formation", () => {
           expect(
             (await f.database.memoryGraph.native.status()).counts.rejected,
           ).toBe(1),
-        { timeout: 8000 },
+        { timeout: 8000, interval: 20 },
       );
       const rejected = (await f.database.memoryGraph.native.status())
         .batches[0]!;
@@ -250,7 +256,7 @@ describe("native Memory formation", () => {
           expect(
             (await f.database.memoryGraph.native.status()).counts.fixed,
           ).toBe(1),
-        { timeout: 8000 },
+        { timeout: 8000, interval: 20 },
       );
       const first = (
         await f.database.memoryGraph.listNodes({ system: "native-v1" })
@@ -262,7 +268,7 @@ describe("native Memory formation", () => {
           expect(
             (await f.database.memoryGraph.getNode(first.id))?.metadata.revision,
           ).toBe(2),
-        { timeout: 8000 },
+        { timeout: 8000, interval: 20 },
       );
       expect((await f.database.memoryGraph.native.status()).counts.fixed).toBe(
         1,

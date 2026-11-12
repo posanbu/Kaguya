@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+/** 功能概述：固定容器入口，启动持久工具服务；身份来自 W6 注入变量，关闭时停止全部受管 job。
+ * 代码库关系：broker 的 ready/control/operation 通过 helper 接入 service.mjs；不连接模型或宿主桌面。 */
+import { startService } from './service.mjs';
+if (process.env.KAGUYA_HELPER_PROTOCOL_VERSION !== '1') throw new Error('helper-protocol-mismatch');
+const components = [];
+if (process.env.KAGUYA_BROWSER_ENABLED === '1') {
+  const { BrowserComponent } = await import('./browser.mjs');
+  components.push(new BrowserComponent());
+}
+await startService({ components });

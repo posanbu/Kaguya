@@ -1,0 +1,273 @@
+/* 领域检视沿用工作台纸色、文字与边线；目录/详情、控制区及原图在窄屏自然堆叠。 */
+.domain-inspection {
+  border-top: 1px solid var(--kaguya-line);
+  padding-top: 16px;
+  color: var(--kaguya-ink);
+  min-width: 0;
+  line-height: 1.65;
+}
+.domain-inspection h2,
+.domain-inspection h3,
+.domain-inspection h4 {
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+.domain-inspection h2 {
+  font-size: 20px;
+}
+.domain-inspection h3 {
+  font-size: 17px;
+}
+.domain-inspection h4 {
+  margin-top: 22px;
+  font-size: 15px;
+}
+.domain-inspection p {
+  max-width: 75ch;
+  overflow-wrap: anywhere;
+}
+.domain-heading,
+.domain-tabs,
+.domain-pager,
+.domain-controls,
+.domain-filters,
+.gui-input {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.domain-heading {
+  justify-content: space-between;
+}
+.domain-heading h2,
+.domain-heading h3 {
+  margin: 0;
+}
+.domain-inspection label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  font-size: 13px;
+}
+.domain-filters {
+  align-items: end;
+}
+.domain-filters label {
+  flex: 1 1 220px;
+}
+.domain-inspection input,
+.domain-inspection select,
+.domain-inspection textarea {
+  background: var(--kaguya-paper);
+  color: var(--kaguya-ink);
+  border: 1px solid var(--kaguya-line);
+  border-radius: 6px;
+  padding: 9px 11px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font: inherit;
+  caret-color: var(--kaguya-coral-strong);
+}
+.domain-inspection input::placeholder,
+.domain-inspection textarea::placeholder {
+  color: var(--kaguya-muted);
+  opacity: 1;
+}
+.domain-tabs .wb-button[aria-pressed="true"] {
+  background: var(--kaguya-paper-soft);
+  border-color: var(--kaguya-coral-strong);
+}
+.domain-boundary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  font-size: 12px;
+  color: var(--kaguya-muted);
+  margin-block: 16px;
+  overflow-wrap: anywhere;
+}
+.domain-browser {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+}
+.domain-browser:has(.domain-detail) {
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.7fr);
+}
+.domain-directory {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+  max-height: 65vh;
+  overflow: auto;
+  scrollbar-color: var(--kaguya-line) transparent;
+}
+.domain-directory > li {
+  border-bottom: 1px solid var(--kaguya-line);
+  padding-block: 12px;
+}
+.domain-directory > li > .wb-button {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  text-align: left;
+  width: 100%;
+  height: auto;
+  white-space: normal;
+  padding: 12px;
+  gap: 5px;
+}
+.domain-directory > li > .wb-button[aria-pressed="true"] {
+  background: var(--kaguya-paper-soft);
+}
+.domain-detail {
+  min-width: 0;
+}
+.domain-fields {
+  margin: 12px 0;
+}
+.domain-fields > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.65fr) minmax(0, 2fr);
+  gap: 12px;
+  padding-block: 6px;
+  border-bottom: 1px solid var(--kaguya-line);
+}
+.domain-fields dt {
+  color: var(--kaguya-muted);
+}
+.domain-fields dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.domain-inspection code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font-size: 12px;
+}
+.domain-content {
+  max-width: 75ch;
+  overflow-wrap: anywhere;
+}
+.domain-content pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.inspection-reference {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  gap: 4px;
+  margin-block: 10px;
+  overflow-wrap: anywhere;
+}
+.inspection-reference > span {
+  font-size: 12px;
+  color: var(--kaguya-muted);
+}
+.domain-inspection a {
+  color: var(--kaguya-coral-strong);
+  text-underline-offset: 3px;
+}
+.domain-inspection :focus-visible {
+  outline: 2px solid var(--kaguya-coral-strong);
+  outline-offset: 3px;
+}
+.domain-inspection ::selection {
+  background: var(--kaguya-paper-soft);
+  color: var(--kaguya-ink);
+}
+.domain-pager {
+  margin-top: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.environment-control,
+.gui-task {
+  padding-block: 20px;
+  border-top: 1px solid var(--kaguya-line);
+}
+.environment-state {
+  margin-block: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.gui-capture {
+  margin: 20px 0;
+}
+.gui-capture > button {
+  display: block;
+  border: 1px solid var(--kaguya-line);
+  background: var(--kaguya-paper);
+  padding: 0;
+  max-width: 100%;
+  cursor: crosshair;
+}
+.gui-capture img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.gui-capture figcaption {
+  font-size: 12px;
+  margin-top: 8px;
+  color: var(--kaguya-muted);
+}
+.gui-input {
+  align-items: end;
+}
+.gui-input label {
+  flex: 1 1 160px;
+}
+.gui-input input[type="number"] {
+  max-width: 160px;
+}
+.gui-task textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+.gui-task form > .wb-button {
+  margin-block: 12px;
+}
+.situation-domain {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.situation-domain[open] {
+  overflow: visible;
+}
+.wb-shell-situation:has(.situation-domain[open]) {
+  height: auto;
+}
+.situation-page:has(.situation-domain[open]) .situation-workspace {
+  flex: none;
+  min-height: 640px;
+}
+.situation-domain > summary {
+  cursor: pointer;
+  padding: 10px 0;
+  font-weight: 500;
+}
+@media (max-width: 800px) {
+  .domain-browser:has(.domain-detail) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .domain-directory {
+    max-height: 40vh;
+  }
+  .domain-fields > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .domain-tabs {
+    gap: 6px;
+  }
+  .domain-tabs .wb-button {
+    padding-inline: 10px;
+  }
+}

@@ -4,7 +4,8 @@
  * 过滤和身份、重连/重启/心跳/异常 gap、队列背压、磁盘部分写入、独占锁及一致性伪名导出。
  * 代码库关系：直接驱动 NapCatCapture/CaptureJournal 和 freezeCapture；Python 子进程验收导出协议。
  * 输入输出与副作用：只在随机临时目录读写；写入竞态通过 Promise barrier 控制，无固定 sleep。
- * 所有 fixture 在失败路径释放 barrier、停止服务并删除目录，子进程有显式 15 秒失败上限。
+ * 所有 fixture 在失败路径释放 barrier 并逐项有界清理；stop/子进程close未确认时保留目录。
+ * 导出验收保留三个 Python 阶段各15秒上限，外层另计采集/导出与文件核对预算，失败报告当前阶段。
  */
 import {
   mkdtemp,
@@ -17,9 +18,8 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { afterEach, expect, it, vi } from "vitest";
+import { execFile, type ChildProcess } from "node:child_process";
+import { afterEach, expect, it, onTestFailed, vi } from "vitest";
 import {
   CaptureJournal,
   NapCatCapture,
@@ -29,10 +29,118 @@ import {
 import { freezeCapture } from "./napcat-capture-export.js";
 
 const epoch = Date.parse("2026-01-01T00:00:00Z");
-const cleanup: Array<() => Promise<void>> = [];
+type CaptureOwner = {
+  root: string;
+  retained: boolean;
+  captures: Set<NapCatCapture>;
+};
+type Cleanup = {
+  phase: string;
+  budgetMs: number;
+  owner?: CaptureOwner;
+  run: () => Promise<unknown>;
+};
+type PythonChild = {
+  child: ChildProcess;
+  closed: Promise<void>;
+  didClose: boolean;
+  owner: CaptureOwner;
+};
+const cleanup: Cleanup[] = [];
+const pythonChildren = new Set<PythonChild>();
+const pythonStageTimeout = 15_000;
+const childCloseTimeout = 5_000;
+const captureStopTimeout = 8_000;
+const filesCleanupTimeout = 5_000;
+// 三个 Python 阶段各15秒执行+5秒close，采集/导出和文件核对各15秒。
+const exportTestTimeout =
+  2 * 15_000 + 3 * (pythonStageTimeout + childCloseTimeout);
+// 至多一个Python、两个同目录capture、两次barrier释放和文件删除，另留2秒hook调度余量。
+const cleanupHookTimeout =
+  childCloseTimeout +
+  2 * captureStopTimeout +
+  filesCleanupTimeout +
+  2 * 1_000 +
+  2_000;
+async function bounded<T>(
+  phase: string,
+  budgetMs: number,
+  run: () => Promise<T>,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(run),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${phase} unconfirmed after ${budgetMs}ms`)),
+          budgetMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function ownDirectory(root: string): CaptureOwner {
+  const owner: CaptureOwner = { root, retained: false, captures: new Set() };
+  cleanup.push({
+    phase: "capture directory removal",
+    budgetMs: filesCleanupTimeout,
+    owner,
+    run: async () => {
+      if (owner.retained || owner.captures.size) {
+        console.error(
+          `Capture fixture retained at ${root}; cleanup unconfirmed or test interrupted`,
+        );
+        return;
+      }
+      await rm(root, { recursive: true, force: true });
+    },
+  });
+  return owner;
+}
+function ownCapture(owner: CaptureOwner, capture: NapCatCapture) {
+  owner.captures.add(capture);
+  cleanup.push({
+    phase: "capture stop",
+    budgetMs: captureStopTimeout,
+    owner,
+    run: async () => {
+      await capture.stop();
+      owner.captures.delete(capture);
+    },
+  });
+}
 afterEach(async () => {
-  for (const close of cleanup.splice(0).reverse()) await close();
-});
+  const errors: unknown[] = [];
+  // AbortError/callback不是close。先要求实际close；未确认时保留该child的所有输入输出。
+  for (const record of [...pythonChildren]) {
+    try {
+      if (!record.didClose) record.child.kill("SIGKILL");
+      await bounded(
+        "Python child close",
+        childCloseTimeout,
+        () => record.closed,
+      );
+      pythonChildren.delete(record);
+    } catch (error) {
+      record.owner.retained = true;
+      errors.push(error);
+    }
+  }
+  for (const task of cleanup.splice(0).reverse()) {
+    try {
+      await bounded(task.phase, task.budgetMs, task.run);
+    } catch (error) {
+      if (task.owner) task.owner.retained = true;
+      errors.push(error);
+    }
+  }
+  if (errors.length)
+    throw new AggregateError(errors, "Capture fixture cleanup failed");
+}, cleanupHookTimeout);
+
 async function fixture(
   extra: Partial<ConstructorParameters<typeof NapCatCapture>[0]> = {},
 ) {
@@ -50,15 +158,15 @@ async function fixture(
     ...extra,
   };
   const capture = new NapCatCapture(options);
-  cleanup.push(async () => {
-    await capture.stop();
-    await rm(root, { recursive: true, force: true });
-  });
+  const owner = ownDirectory(root);
+  ownCapture(owner, capture);
   await capture.start();
   expect(capture.status().state).toBe("waiting_for_identity");
   capture.connected("g1");
   return {
     root,
+    owner,
+    own: (other: NapCatCapture) => ownCapture(owner, other),
     capture,
     options,
     errors,
@@ -247,13 +355,14 @@ it("rejects other groups, private messages, wrong accounts and action replies be
 
 it("does not create a journal when capture is disabled", async () => {
   const root = await mkdtemp(join(tmpdir(), "kaguya-capture-disabled-"));
-  cleanup.push(() => rm(root, { recursive: true, force: true }));
+  const owner = ownDirectory(root);
   const capture = new NapCatCapture({
     directory: join(root, "absent"),
     captureEnabled: false,
     selfId: "100",
     adapterId: "qq",
   });
+  ownCapture(owner, capture);
   await capture.start();
   capture.connected("g");
   capture.receive(message(), "g");
@@ -337,7 +446,11 @@ it("uses a write barrier to prove queue overflow creates a gap and the missed me
   const started = new Promise<void>((resolve) => {
     entered = resolve;
   });
-  cleanup.push(async () => release());
+  cleanup.push({
+    phase: "capture write barrier release",
+    budgetMs: 1_000,
+    run: async () => release(),
+  });
   let first = true;
   const f = await fixture({
     captureQueueLimit: 1,
@@ -352,9 +465,17 @@ it("uses a write barrier to prove queue overflow creates a gap and the missed me
       }),
   });
   // 先释放 barrier 再清理 fixture，即使测试断言失败也不会卡在 stop。
-  cleanup.push(async () => release());
+  cleanup.push({
+    phase: "capture write barrier release",
+    budgetMs: 1_000,
+    run: async () => release(),
+  });
   f.capture.receive(message(), "g1");
-  await started;
+  await bounded(
+    "capture write barrier entered",
+    captureStopTimeout,
+    () => started,
+  );
   f.at(1);
   f.capture.receive(message(2), "g1");
   expect(f.capture.status().counters.queueOverflow).toBe(1);
@@ -414,6 +535,7 @@ it("refuses a concurrent writer without interrupting the first writer", async ()
   const f = await fixture();
   const errors = vi.fn();
   const other = new NapCatCapture({ ...f.options, onError: errors });
+  f.own(other);
   await other.start();
   expect(other.status().state).toBe("failed");
   await other.stop();
@@ -424,98 +546,227 @@ it("refuses a concurrent writer without interrupting the first writer", async ()
   ).toHaveLength(1);
 });
 
-it("exports only committed bytes with stable pseudonyms, independent mappings and no overwrite", async () => {
-  const f = await fixture();
-  f.capture.receive(
-    message(1, 300, { message: "[CQ:at,qq=100][CQ:reply,id=7]hello" }),
-    "g1",
-  );
-  f.at(1800);
-  f.capture.receive(heartbeat(), "g1");
-  f.capture.checkpoint();
-  await f.capture.settle();
-  const keyPath = join(f.root, "key");
-  await writeFile(keyPath, "k".repeat(32));
-  const one = join(f.root, "one"),
-    two = join(f.root, "two");
-  const args = {
-    journalDirectory: f.options.directory,
-    identityKeyFile: keyPath,
-    output: one,
-  };
-  const first = await freezeCapture(args);
-  await appendFile(
-    join(f.options.directory, "events.jsonl"),
-    "UNCOMMITTED_CRASH_TAIL",
-  );
-  const second = await freezeCapture({ ...args, output: two });
-  expect(first).toEqual(second);
-  const source = await readFile(join(one, "events.jsonl"), "utf8");
-  expect(source).toBe(await readFile(join(two, "events.jsonl"), "utf8"));
-  expect(source).not.toMatch(
-    /fictional member|@100|\[reply:7\]|"accountId":"100"|UNCOMMITTED/,
-  );
-  const records = source
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line) as CaptureRecord);
-  const mapped = records.find((r) => r.eventType === "message")!;
-  expect(mapped.text).toContain(`@${mapped.scope.accountId}`);
-  expect(mapped.senderName).toBe(null);
-  const mapping = await readFile(
-    join(one, "identity-map.private.json"),
-    "utf8",
-  );
-  expect(mapping).toContain('"original": "100"');
-  await expect(freezeCapture(args)).rejects.toMatchObject({ code: "EEXIST" });
-  // 用真实 Python loader 验收 TypeScript 导出的 JSONL 与原离线协议兼容。
-  const configPath = join(f.root, "config.json");
-  await writeFile(
-    configPath,
-    JSON.stringify({
-      schemaVersion: 1,
-      dataKind: "private",
-      targets: [{ scope: mapped.scope, userId: mapped.senderId }],
-      blocks: ["history", "dev", "test"].map((split, i) => ({
-        id: `block-${i}`,
-        split,
-        start: new Date(epoch + i * 600000).toISOString(),
-        end: new Date(epoch + (i + 1) * 600000).toISOString(),
-      })),
-    }),
-  );
-  const python = process.platform === "win32" ? "python" : "python3";
-  const result = await promisify(execFile)(
-    python,
-    [
-      resolve("benchmarks/participation/bench.py"),
-      "prepare",
-      "--source",
-      join(one, "events.jsonl"),
-      "--config",
-      configPath,
-      "--output",
-      join(f.root, "dataset"),
-    ],
-    { timeout: 15000, env: { ...process.env, PYTHONUTF8: "1" } },
-  );
-  expect(JSON.parse(result.stdout).counts.samples).toBeGreaterThan(0);
-  for (const command of ["preview", "evaluate"]) {
-    const completed = await promisify(execFile)(
-      python,
-      [
-        resolve("benchmarks/participation/bench.py"),
-        command,
-        "--dataset",
-        join(f.root, "dataset"),
-        "--output",
-        join(f.root, command),
-      ],
-      { timeout: 15000, env: { ...process.env, PYTHONUTF8: "1" } },
+it(
+  "exports only committed bytes with stable pseudonyms, independent mappings and no overwrite",
+  async (context) => {
+    const phases: { name: string; durationMs: number; outcome: string }[] = [];
+    let current: { name: string; started: number } | null = null;
+    let frozenDiagnostic: unknown;
+    let owner: CaptureOwner | undefined;
+    const freezeDiagnostic = () => {
+      frozenDiagnostic ??= structuredClone({
+        phases,
+        current: current
+          ? {
+              name: current.name,
+              elapsedMs: performance.now() - current.started,
+            }
+          : null,
+        pythonChildren: [...pythonChildren].map((r) => ({
+          pid: r.child.pid ?? null,
+          closeConfirmed: r.didClose,
+        })),
+        pythonStageTimeout,
+        childCloseTimeout,
+        exportTestTimeout,
+      });
+    };
+    const abort = () => {
+      if (owner) owner.retained = true;
+      for (const task of cleanup) if (task.owner) task.owner.retained = true;
+      freezeDiagnostic();
+    };
+    context.signal.addEventListener("abort", abort, { once: true });
+    context.onTestFinished(() =>
+      context.signal.removeEventListener("abort", abort),
     );
-    expect(JSON.parse(completed.stdout).network_requests).toBe(0);
-  }
-  expect(
-    await readFile(join(f.root, "preview/requests.jsonl"), "utf8"),
-  ).not.toContain("identity-map");
-});
+    const stage = async <T>(
+      name: string,
+      run: () => Promise<T>,
+    ): Promise<T> => {
+      context.signal.throwIfAborted();
+      const active = { name, started: performance.now() };
+      current = active;
+      let outcome = "passed";
+      try {
+        const result = await run();
+        context.signal.throwIfAborted();
+        return result;
+      } catch (error) {
+        outcome = "failed";
+        freezeDiagnostic();
+        if (owner) owner.retained = true;
+        throw error;
+      } finally {
+        phases.push({
+          name,
+          durationMs: performance.now() - active.started,
+          outcome,
+        });
+        if (current === active) current = null;
+      }
+    };
+    onTestFailed(() => {
+      freezeDiagnostic();
+      console.error("Capture export stages", JSON.stringify(frozenDiagnostic));
+    });
+    const f = await stage("capture startup", () => fixture());
+    owner = f.owner;
+    const pythonCommand = async (args: string[]) => {
+      const output = Promise.withResolvers<{
+        stdout: string;
+        stderr: string;
+      }>();
+      const child = execFile(
+        process.platform === "win32" ? "python" : "python3",
+        args,
+        {
+          timeout: pythonStageTimeout,
+          killSignal: "SIGKILL",
+          signal: context.signal,
+          env: { ...process.env, PYTHONUTF8: "1" },
+        },
+        (error, stdout, stderr) =>
+          error ? output.reject(error) : output.resolve({ stdout, stderr }),
+      );
+      const closed = Promise.withResolvers<void>();
+      const record: PythonChild = {
+        child,
+        closed: closed.promise,
+        didClose: false,
+        owner: f.owner,
+      };
+      child.once("close", () => {
+        record.didClose = true;
+        closed.resolve();
+      });
+      pythonChildren.add(record);
+      let result: { stdout: string; stderr: string } | undefined;
+      const errors: unknown[] = [];
+      try {
+        result = await output.promise;
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        await bounded(
+          "Python callback followed by close",
+          childCloseTimeout,
+          () => record.closed,
+        );
+        pythonChildren.delete(record);
+      } catch (error) {
+        f.owner.retained = true;
+        errors.push(error);
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length)
+        throw new AggregateError(errors, "Python output and close failed");
+      return result!;
+    };
+    f.capture.receive(
+      message(1, 300, { message: "[CQ:at,qq=100][CQ:reply,id=7]hello" }),
+      "g1",
+    );
+    f.at(1800);
+    f.capture.receive(heartbeat(), "g1");
+    f.capture.checkpoint();
+    await stage("capture settle", () => f.capture.settle());
+    const keyPath = join(f.root, "key");
+    await stage("export key write", () => writeFile(keyPath, "k".repeat(32)));
+    const one = join(f.root, "one"),
+      two = join(f.root, "two");
+    const args = {
+      journalDirectory: f.options.directory,
+      identityKeyFile: keyPath,
+      output: one,
+    };
+    const first = await stage("first committed export", () =>
+      freezeCapture(args),
+    );
+    await stage("uncommitted tail append", () =>
+      appendFile(
+        join(f.options.directory, "events.jsonl"),
+        "UNCOMMITTED_CRASH_TAIL",
+      ),
+    );
+    const second = await stage("second committed export", () =>
+      freezeCapture({ ...args, output: two }),
+    );
+    const mapped = await stage(
+      "export bytes pseudonyms and no-overwrite verification",
+      async () => {
+        expect(first).toEqual(second);
+        const source = await readFile(join(one, "events.jsonl"), "utf8");
+        expect(source).toBe(await readFile(join(two, "events.jsonl"), "utf8"));
+        expect(source).not.toMatch(
+          /fictional member|@100|\[reply:7\]|"accountId":"100"|UNCOMMITTED/,
+        );
+        const records = source
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as CaptureRecord);
+        const mapped = records.find((r) => r.eventType === "message")!;
+        expect(mapped.text).toContain(`@${mapped.scope.accountId}`);
+        expect(mapped.senderName).toBe(null);
+        const mapping = await readFile(
+          join(one, "identity-map.private.json"),
+          "utf8",
+        );
+        expect(mapping).toContain('"original": "100"');
+        await expect(freezeCapture(args)).rejects.toMatchObject({
+          code: "EEXIST",
+        });
+        return mapped;
+      },
+    );
+    const configPath = join(f.root, "config.json");
+    await stage("Python configuration write", () =>
+      writeFile(
+        configPath,
+        JSON.stringify({
+          schemaVersion: 1,
+          dataKind: "private",
+          targets: [{ scope: mapped.scope, userId: mapped.senderId }],
+          blocks: ["history", "dev", "test"].map((split, i) => ({
+            id: `block-${i}`,
+            split,
+            start: new Date(epoch + i * 600000).toISOString(),
+            end: new Date(epoch + (i + 1) * 600000).toISOString(),
+          })),
+        }),
+      ),
+    );
+    await stage("Python prepare and sample verification", async () => {
+      const result = await pythonCommand([
+        resolve("benchmarks/participation/bench.py"),
+        "prepare",
+        "--source",
+        join(one, "events.jsonl"),
+        "--config",
+        configPath,
+        "--output",
+        join(f.root, "dataset"),
+      ]);
+      expect(JSON.parse(result.stdout).counts.samples).toBeGreaterThan(0);
+    });
+    for (const command of ["preview", "evaluate"])
+      await stage(`Python ${command} and offline verification`, async () => {
+        const result = await pythonCommand([
+          resolve("benchmarks/participation/bench.py"),
+          command,
+          "--dataset",
+          join(f.root, "dataset"),
+          "--output",
+          join(f.root, command),
+        ]);
+        expect(JSON.parse(result.stdout).network_requests).toBe(0);
+      });
+    await stage("preview output verification", async () => {
+      expect(
+        await readFile(join(f.root, "preview/requests.jsonl"), "utf8"),
+      ).not.toContain("identity-map");
+    });
+  },
+  exportTestTimeout,
+);

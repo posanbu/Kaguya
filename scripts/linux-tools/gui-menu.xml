@@ -1,0 +1,6 @@
+<!-- 应用 UID 的固定合成菜单，用于真实桌面派生进程身份验收。 -->
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="root-menu" label="Kaguya acceptance">
+    <item label="Record application identity"><action name="Execute"><command>/usr/bin/python3 /opt/kaguya-tools/gui-launch-marker.py menu</command></action></item>
+  </menu>
+</openbox_menu>

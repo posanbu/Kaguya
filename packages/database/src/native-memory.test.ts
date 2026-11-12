@@ -1,3 +1,7 @@
+/**
+ * 功能概述：使用 PGlite 和真实 PostgreSQL 验证 native 发布、epoch、范围及检索行为。
+ * 主要职责：保留原始证据和幂等断言；测试数据库由独立 fixture 创建并在清理阶段关闭。
+ */
 import { freezeInformationAtom, informationAtomSchema } from "@kaguya/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -535,16 +539,25 @@ describe.each(backends)("native memory ($name)", ({ create }) => {
 
   it("keeps the cutover watermark across restart and excludes legacy evidence", async () => {
     const db = await setup();
-    await db.information.synchronizeKinds(["test.memory.source"]);
+    await db.information.synchronizeKinds(["core.message.inbound.text"]);
     const append = async (id: string) =>
       db.information.append(
         freezeInformationAtom(
           informationAtomSchema.parse({
             informationId: id,
-            kind: "test.memory.source",
+            kind: "core.message.inbound.text",
             occurredAt: "2026-10-20T00:00:00Z",
             source: "test:memory",
-            payload: { text: id },
+            payload: {
+              text: id,
+              source: {
+                platform: "qq",
+                adapterId: "qq",
+                senderId: "ada",
+                selfId: "bot",
+                destination: { kind: "group", groupId: "a" },
+              },
+            },
             references: [],
           }),
         ),
@@ -555,7 +568,7 @@ describe.each(backends)("native memory ($name)", ({ create }) => {
     await db.prepareSchema();
     const source = (id: string) => ({
       id,
-      scope: "scope-a",
+      scope: JSON.stringify(["qq", "qq", "group", "a"]),
       ownerId: "person:ada",
       text: id,
       sourceType: "inbound" as const,
@@ -591,7 +604,7 @@ describe.each(backends)("native memory ($name)", ({ create }) => {
     ).rejects.toThrow("memory_evidence_before_epoch");
     expect(
       await db.memoryGraph.native.claim(
-        "scope-a",
+        JSON.stringify(["qq", "qq", "group", "a"]),
         true,
         "2026-10-20T00:00:59Z",
       ),
@@ -599,7 +612,7 @@ describe.each(backends)("native memory ($name)", ({ create }) => {
     expect(
       (
         await db.memoryGraph.native.claim(
-          "scope-a",
+          JSON.stringify(["qq", "qq", "group", "a"]),
           true,
           "2026-10-20T00:01:00Z",
         )

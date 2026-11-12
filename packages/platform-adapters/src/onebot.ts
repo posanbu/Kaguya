@@ -4,7 +4,8 @@
  * adapter 层只保留外部身份和内容，不产生 Core identity。
  * 主要职责：`normalizeOneBotMessageEvent` 校验 message event、过滤机器人自身、
  * 正规化 text/mention/sender/target/occurredAt 并保留 `platformMessageId`；
- * `buildOneBotSendAction` 将文本或 reply 内容编码为私聊/群聊 action。
+ * `buildOneBotSendAction` 将文本、语音及已解析图片按顺序编码为私聊/群聊 action。
+ * 入站 contentSegments 在原消息位置保留文字与图片、表情的未授权来源句柄；不会下载或创建素材 ID。
  * normalizeOneBotCaptureContent 仅投影文本、寻址关系及媒体类型，供独立采集保留自身消息和空正文；不保存媒体 URL。
  * 代码库关系：NapCat adapter 复用入站正规化器与出站 action builder；
  * 输出 `PlatformInboundMessage` 随后由 `InformationIngress` 提交给 Runtime。
@@ -16,13 +17,16 @@ import {
   qqExpressionSchema,
   type QqExpression,
   type OutboundMessageContent,
+  type OutboundExpression,
 } from "@kaguya/schema";
 
 import type {
   PlatformInboundMessage,
+  PlatformInboundContentSegment,
   PlatformMessageMention,
   PlatformMessageSender,
   PlatformMessageTarget,
+  PlatformOutboundMetadata,
 } from "./types.js";
 
 export interface NormalizeOneBotOptions {
@@ -138,6 +142,11 @@ export function normalizeOneBotMessageEvent(
         : new Date(event.time * 1000).toISOString(),
     text,
     mentions: normalizedMessage.mentions,
+    ...(normalizedMessage.contentSegments.some(
+      (segment) => segment.kind === "media",
+    )
+      ? { contentSegments: normalizedMessage.contentSegments }
+      : {}),
     ...(normalizedMessage.expressions.length
       ? { expressions: normalizedMessage.expressions }
       : {}),
@@ -154,42 +163,68 @@ export function buildOneBotSendAction(
   target: PlatformMessageTarget,
   content: string | OutboundMessageContent,
   echo: string,
+  metadata?: PlatformOutboundMetadata,
 ): OneBotActionRequest {
   const normalized: OutboundMessageContent =
     typeof content === "string"
       ? ({ kind: "text", text: content } as const)
       : content;
-  const message: readonly OneBotMessageSegment[] = [
-    ...(normalized.kind === "reply"
+  const message: readonly OneBotMessageSegment[] =
+    normalized.kind === "content"
       ? [
-          {
-            type: "reply",
-            data: { id: normalized.replyToPlatformMessageId },
-          },
+          ...normalized.segments.map((segment): OneBotMessageSegment => {
+            if (segment.kind === "text")
+              return { type: "text", data: { text: segment.text } };
+            const matches =
+              metadata?.images?.filter(
+                (image) => image.mediaId === segment.mediaId,
+              ) ?? [];
+            const image = matches[0];
+            if (
+              matches.length !== 1 ||
+              !image ||
+              !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
+                image.mimeType,
+              ) ||
+              image.bytes.byteLength === 0
+            )
+              throw new Error(
+                "Image delivery requires one resolved media resource",
+              );
+            return {
+              type: "image",
+              data: {
+                file: `base64://${Buffer.from(image.bytes).toString("base64")}`,
+              },
+            };
+          }),
+          ...(normalized.expression
+            ? [encodeExpression(normalized.expression)]
+            : []),
         ]
-      : []),
-    { type: "text", data: { text: normalized.text } },
-    ...(normalized.kind === "text" && normalized.expression
-      ? [
-          normalized.expression.kind === "mface"
-            ? {
-                type: "mface",
-                data: {
-                  emoji_id: normalized.expression.id,
-                  emoji_package_id: Number(normalized.expression.packageId),
-                  summary: "[表情]",
-                  key: normalized.expression.key,
-                },
-              }
-            : normalized.expression.kind === "face"
-              ? { type: "face", data: { id: normalized.expression.id } }
-              : {
-                  type: "image",
-                  data: { file: normalized.expression.file, sub_type: 1 },
-                },
-        ]
-      : []),
-  ];
+      : normalized.kind === "audio"
+        ? [
+            {
+              type: "record",
+              data: {
+                file: `base64://${Buffer.from(requireAudioMedia(normalized, metadata).bytes).toString("base64")}`,
+              },
+            },
+          ]
+        : [
+            ...(normalized.kind === "reply"
+              ? [
+                  {
+                    type: "reply",
+                    data: { id: normalized.replyToPlatformMessageId },
+                  },
+                ]
+              : []),
+            { type: "text", data: { text: normalized.text } },
+            ...(normalized.kind === "text" && normalized.expression
+              ? [encodeExpression(normalized.expression)]
+              : []),
+          ];
   if (target.kind === "private") {
     return {
       action: "send_private_msg",
@@ -207,6 +242,41 @@ export function buildOneBotSendAction(
   throw new Error("OneBot cannot send messages to web destinations");
 }
 
+function encodeExpression(
+  expression: OutboundExpression,
+): OneBotMessageSegment {
+  if (expression.kind === "mface")
+    return {
+      type: "mface",
+      data: {
+        emoji_id: expression.id,
+        emoji_package_id: Number(expression.packageId),
+        summary: "[表情]",
+        key: expression.key,
+      },
+    };
+  if (expression.kind === "face")
+    return { type: "face", data: { id: expression.id } };
+  return { type: "image", data: { file: expression.file, sub_type: 1 } };
+}
+
+function requireAudioMedia(
+  content: Extract<OutboundMessageContent, { kind: "audio" }>,
+  metadata: PlatformOutboundMetadata | undefined,
+) {
+  const media = metadata?.media;
+  if (
+    !media ||
+    media.mimeType !== content.mimeType ||
+    media.sha256 !== content.sha256 ||
+    media.bytes.byteLength !== content.byteLength
+  )
+    throw new Error(
+      "Audio delivery requires a matching resolved media resource",
+    );
+  return media;
+}
+
 function targetFor(
   messageType: "private" | "group",
   groupIdValue: string | number | undefined,
@@ -222,12 +292,52 @@ function normalizeMessage(
 ): {
   readonly text: string;
   readonly expressions: readonly QqExpression[];
+  readonly contentSegments: readonly PlatformInboundContentSegment[];
   readonly mentions: readonly PlatformMessageMention[];
   readonly replyTo?: { readonly platformMessageId: string };
 } {
   const mentions: PlatformMessageMention[] = [];
   // CQ 字符串先按 wire 结构分段；转义只解一次，正文中的转义 CQ 不会成为媒体。
   if (typeof message === "string") message = parseCqSegments(message);
+  const contentSegments: PlatformInboundContentSegment[] = [];
+  message.forEach((segment, position) => {
+    if (
+      segment.type === "image" ||
+      segment.type === "face" ||
+      segment.type === "mface"
+    ) {
+      const data = segment.data ?? {};
+      const source: Record<string, string> = {};
+      for (const key of [
+        "file",
+        "file_id",
+        "file_unique",
+        "url",
+        "id",
+        "emoji_id",
+        "emoji_package_id",
+        "key",
+        "sub_type",
+      ]) {
+        const value = data[key];
+        if (
+          (typeof value === "string" || typeof value === "number") &&
+          String(value).length > 0
+        )
+          source[key] = String(value);
+      }
+      contentSegments.push({
+        kind: "media",
+        position,
+        mediaType: segment.type,
+        source,
+      });
+      return;
+    }
+    // 使用单独的 mention 容器，避免与兼容文本路径重复记录提及。
+    const text = segmentToText(segment, []);
+    if (text) contentSegments.push({ kind: "text", text });
+  });
   const expressions = message
     .flatMap((segment): QqExpression[] => {
       const data = segment.data ?? {};
@@ -273,6 +383,7 @@ function normalizeMessage(
     text,
     mentions,
     expressions,
+    contentSegments,
     ...(replyTo ? { replyTo: { platformMessageId: replyTo } } : {}),
   };
 }

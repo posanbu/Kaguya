@@ -12,11 +12,13 @@ export type {
   InformationIngress,
   PlatformDeliveryReceipt,
   PlatformInboundMessage,
+  PlatformInboundContentSegment,
   PlatformMessageReplyTo,
   PlatformMessageMention,
   PlatformMessageSender,
   PlatformMessageTarget,
   PlatformName,
+  PlatformOutboundMetadata,
   PlatformOutboundTransport,
 } from "./types.js";
 export {

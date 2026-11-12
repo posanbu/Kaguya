@@ -1,0 +1,13 @@
+<!-- 应用 UID 的生产窗口管理器：固定菜单启动终端/浏览器，配置来自只读镜像。 -->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <focus><focusNew>yes</focusNew><followMouse>no</followMouse></focus>
+  <keyboard>
+    <keybind key="A-F2"><action name="Execute"><command>/usr/bin/xterm -fa monospace -fs 11</command></action></keybind>
+    <keybind key="A-F9"><action name="ShowMenu"><menu>root-menu</menu></action></keybind>
+  </keyboard>
+  <menu><file>/opt/kaguya-tools/gui-menu-production.xml</file></menu>
+  <mouse>
+    <context name="Titlebar"><mousebind button="Left" action="Drag"><action name="Move"/></mousebind></context>
+    <context name="Root"><mousebind button="Right" action="Press"><action name="ShowMenu"><menu>root-menu</menu></action></mousebind></context>
+  </mouse>
+</openbox_config>

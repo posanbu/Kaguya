@@ -1,0 +1,13 @@
+# 功能概述：固定 Playwright/Chromium 与 Node 的可信 browser 镜像，不在运行时安装模型或依赖。
+# /private 由 W6 单独挂载；shell job 只取得 workspace，不能取得 profile 或控制通道。
+FROM node:24.18.0-bookworm-slim@sha256:d45d78e7929b46875bbd4e29bea672d5bc48186c6c3588306521c815e78352d6 AS node
+FROM mcr.microsoft.com/playwright@sha256:d65108d1a8095d8b0c4a5e32bf1807a40a5ce90ff0c78473e1116b1c243235e8
+COPY --from=node /usr/local/ /usr/local/
+COPY scripts/linux-tools/browser-runtime/ /opt/kaguya-browser/
+RUN cd /opt/kaguya-browser && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --ignore-scripts --no-audit --no-fund && test -x /usr/bin/python3
+COPY --chown=0:0 scripts/linux-tools/ /opt/kaguya-tools/
+RUN chmod 0555 /opt/kaguya-tools/init /opt/kaguya-tools/helper && mkdir -p /workspace /home/tool /private && chown 1000:1000 /workspace /home/tool /private
+USER 1000:1000
+ENV HOME=/home/tool PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+WORKDIR /workspace
+ENTRYPOINT ["/opt/kaguya-tools/init"]

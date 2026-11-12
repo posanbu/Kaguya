@@ -12,7 +12,7 @@
 
 新意图严格包含 `target: { adapterId, platform, destination }`、必填 turn provenance 和 `memoryInformationIds`。旧意图中的 `composition` 仍可解析以支持重放，但不再进入 Heavy Prompt。意图不复制源消息正文、源平台消息 ID 或引用标记。Selector 沿引用重载冻结 context 及其全部输入，并验证目标范围与 provenance。Heavy 使用整个 `turn.inputs`，不会把最后一条输入标成必须回答的目标消息。
 
-历史只纳入同范围入站及已成功投递的 assistant。统一 Memory 使用该回合冻结的固定摘要和动态召回，作为 `native_memory` 数据段注入。显式历史消息引用仍须来自意图列出的来源。引用机器人消息时，Selector 通过同目标的成功投递回执追溯 assistant 原子，并把回执与因果链保留为引用溯源；晚于冻结时点的回执、失败投递和歧义结果不会用于解析。每条入站的引用可作为理解上下文，出站始终是普通 `kind: "text"`，投递地址只来自意图 target。公共 OneBot `kind: "reply"` 能力保留给专用模块。
+历史只纳入同范围入站及已成功投递的 assistant。统一 Memory 使用该回合冻结的固定摘要和动态召回，作为 `native_memory` 数据段注入。显式历史消息引用仍须来自意图列出的来源。引用机器人消息时，Selector 通过同目标的成功投递回执追溯 assistant 原子，并把回执与因果链保留为引用溯源；晚于冻结时点的回执、失败投递和歧义结果不会用于解析。每条入站的引用可作为理解上下文，出站可用普通文字或有序文字与媒体段，投递地址只来自意图 target。公共 OneBot `kind: "reply"` 能力保留给专用模块。
 
 ## Prompt 模板
 
@@ -36,7 +36,7 @@
 
 ## 可靠性、幂等和失败行为
 
-普通回复使用结构化输出：`message(text, continuation)`、`silent` 或 `recall(query, candidateIds)`。`continuation` 是简短的未完成表达意图，`null` 表示本条投递后结束。旧输出缺少该字段时仍按单条消息处理。silent 不要求另写理由。授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成用于投递的 assistant 原子，由情境运行模块关闭回合。模型任务仍保存服务实际返回的原生消息、推理项和协议元数据，后续调用按兼容协议接续。界面缺少可读推理时显示“未提供”。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
+普通回复使用结构化输出：`message(text, continuation, contentSegments?)`、`silent` 或 `recall(query, candidateIds)`。`continuation` 是简短的未完成表达意图，`null` 表示本条投递后结束。旧输出缺少该字段时仍按单条消息处理。silent 不要求另写理由。授权跨会话发送使用文本输出。稳定任务键复用等价 Model Task；assistant、silent 与 delivery 使用实例级 `registerOnce` 去重。silent 不生成用于投递的 assistant 原子，由情境运行模块关闭回合。模型任务仍保存服务实际返回的原生消息、推理项和协议元数据，后续调用按兼容协议接续。界面缺少可读推理时显示“未提供”。模型 failed/cancelled 不生成 assistant，缺少冻结引用或 provenance 不一致时拒绝继续。
 
 ## 日志与可观测性
 
@@ -44,7 +44,7 @@
 
 ## 典型场景
 
-群聊中多条输入在同一 turn 冻结后，Router 创建一个当前群聊消息意图。Heavy 结合全部发言，判断是否仍值得回应；发言时只完成一次自然交流动作，可按语境使用短句，也不设固定字数上限。默认 OneBot action 只包含 text segment，即使某条入站消息带有引用标记。
+群聊中多条输入在同一 turn 冻结后，Router 创建一个当前群聊消息意图。Heavy 结合全部发言，判断是否仍值得回应；发言时只完成一次自然交流动作，可按语境使用短句，也不设固定字数上限。OneBot action 按已授权内容段保留文字与媒体顺序；入站引用标记不会自动变成出站回复段。
 
 ## 自然语言跨会话与背景
 
@@ -56,7 +56,7 @@ QQ 群聊、私聊和 Web 普通聊天共用逐段流程。初次发言经过 Li
 
 默认 Prompt 要求独立的回应、解释和追问优先分条，即使总字数较少。只有一个意思时仍可单条结束。缺少当前话题的关键背景时允许自然问清，角色设定不能用于补造现实日程。分段由模型决定，这些要求不保证每次生成都符合预期，需要结合实际投递记录检查。
 
-`agent.heavy.message.ready` 保存最终正文和发送期限，one-shot 调度器负责到期释放。`core.delivery.delivered` 只在本段仍有 continuation 时触发 `agent.heavy.step.requested`。下一步保存原意图、步骤序号、冻结上下文、未完成意图、新输入及此前每段实际回执。成功处理后通过 `agent.heavy.step.observed` 推进观察水位。冻结和失败不推进水位。
+`agent.heavy.message.ready` 保存最终正文和发送期限，one-shot 调度器负责到期释放。已生成的待发段在计划发送时刻五分钟后恢复时，Heavy 关闭本段及剩余接续，不再发布旧正文；已投递回执仍保留。`core.delivery.delivered` 只在本段仍有 continuation 时触发 `agent.heavy.step.requested`。下一步保存原意图、步骤序号、冻结上下文、未完成意图、新输入及此前每段实际回执。成功处理后通过 `agent.heavy.step.observed` 推进观察水位。冻结和失败不推进水位。
 
 正在生成或等待发送的当前段通常发完。新消息进入下一段，包括停止请求。Heavy 通常承接普通插话，按更正调整后文，按停止请求结束。未处理的新消息仍由 Heartbeat 接收。接续选择 silent 时，如果已经发送过消息，整个表达记为 completed，保留最后一次成功回执。
 
@@ -67,3 +67,11 @@ QQ 群聊、私聊和 Web 普通聊天共用逐段流程。初次发言经过 Li
 Heavy 声明可选的 `memory:native` 依赖。普通回复可以请求补查，授权跨会话正文仍保持单次文本生成。请求和结果分别保存为 `agent.heavy.recall.requested` 与 `agent.heavy.recall.completed`。结果冻结后才再次调用模型，重放复用该结果。失败和关闭状态也进入结果记录，不能被解释为此前没有发生过交流。
 
 范围和时间由原始 `native_memory` 决定。候选 ID 必须已经出现在本轮可见记录中，检索不能创建人物绑定。`memory_recall` 保存本次表达的结果与剩余额度，接续继承，默认最多两次。检索不会生成待发消息、提交回合终态或推进观察水位。最终回复和投递继续使用原意图和原接续步骤。
+
+## 已授权输出与独立 TTS 插件
+
+Heavy 在授权检查后只登记 `core.message.assistant.authorized`。装配默认文字输出模块；启用独立 TTS 输出插件时通过同一 capability 互斥接管，不会同时发送文字和语音。分段节奏与 recall 仍由 Heavy 控制，已授权事实保留完整 speech 元数据。输出处理器必须将其透传到投递请求，由实际投递成功回执推动下一段，合成成功不代表投递完成。
+
+## 冻结媒体输出
+
+`contentSegments` 使用有序 `text` 和 `mediaRef`。`text` 必须与文字段拼接结果一致；含媒体时可为空。Heavy 校验素材来自本次 ModelTask 保存的实际输入，并把 `mediaRequestInformationId` 随草稿、助手消息和逐段表达保存。素材范围和原始字节由投递宿主再次验证。关闭识图仍可选择已授权的可用素材，不可用或超预算引用不能发送。

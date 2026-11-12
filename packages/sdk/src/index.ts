@@ -1,4 +1,5 @@
 /**
+ * native-tools 导出循环预算及持久步骤事实，供 Runtime/database 共享验证。
  * 功能概述：聚合信息原子模块 SDK 的最终公共 API，使模块作者只接触 kind 声明、
  * `onInformation` 订阅、`context.register` 派生边界与显式 Selector 上下文选择契约。
  * module-plugin.ts 还导出独立插件、持久 Kind 版本及只读兼容转换的公共协议。
@@ -35,3 +36,7 @@ export * from "./modules.js";
 export * from "./module-plugin.js";
 
 export * from "./observation.js";
+
+export * from "./action.js";
+export * from "./native-tools.js";
+export * from "./media-resources.js";

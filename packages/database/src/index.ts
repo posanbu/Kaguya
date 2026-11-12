@@ -1,4 +1,7 @@
 /**
+ * mediaSources 独立于 Memory 保存来源权限与请求快照；prepareSchema 同时准备其附加表。
+ * inspection-reader 提供跨领域只读快照查询，不调用运行或恢复端口。
+ * nativeTools 保存工具循环预算、dispatch 和调用映射；迁移在行动表之后初始化。
  * memoryGraph 暴露三字段节点与有向类型边的独立 PostgreSQL 存储。
  * 功能概述：提供 Kaguya 唯一的 PostgreSQL 信息账本入口，组合驱动、schema 准备与
  * append-only `InformationRepository`。
@@ -11,8 +14,37 @@
  * 集成测试与运维边界使用，不再创建 SQLite 文件或旧消息/运行记录仓储。
  * observations 组合持久场景、冻结清单和消费者进度；prepareSchema 在基础账本后执行幂等附加迁移。
  */
+import {
+  PostgresMediaSourceStore,
+  prepareMediaSourceSchema,
+} from "./media-source-store.js";
+export { PostgresMediaResourceStore } from "./media-resource-store.js";
+export { PostgresMediaSourceStore } from "./media-source-store.js";
+import { prepareNativeMemoryToolSchema } from "./native-memory-tools.js";
+export {
+  NativeMemoryTools,
+  nativeMemoryToolSchemas,
+} from "./native-memory-tools.js";
+import {
+  PostgresNativeToolStore,
+  prepareNativeToolSchema,
+} from "./native-tool-store.js";
+export {
+  PostgresNativeToolStore,
+  type NativeToolRunRow,
+  type NativeToolCallRow,
+} from "./native-tool-store.js";
 import { PostgresObservationStore } from "./observation-store.js";
 import { prepareObservationSchema } from "./observation-schema.js";
+import { PostgresActionStore, prepareActionSchema } from "./action-store.js";
+export {
+  PostgresActionStore,
+  actionDigest,
+  actionBasisDigest,
+  actionExecutionDigest,
+  type ActionAuthorization,
+  type ActionClaim,
+} from "./action-store.js";
 import { PgDatabase, type SqlDatabase } from "./driver.js";
 export { PgDatabase, type SqlDatabase } from "./driver.js";
 import { InformationRepository } from "./information-repository.js";
@@ -88,6 +120,9 @@ export {
 } from "./native-memory.js";
 
 export class KaguyaDatabase {
+  readonly mediaSources: PostgresMediaSourceStore;
+  readonly actions: PostgresActionStore;
+  readonly nativeTools: PostgresNativeToolStore;
   readonly observations: PostgresObservationStore;
   readonly information: InformationRepository;
   readonly memoryGraph: PostgresMemoryGraphStore;
@@ -95,6 +130,9 @@ export class KaguyaDatabase {
   readonly modelRequestMetrics: ModelRequestMetricsRepository;
 
   constructor(readonly sql: SqlDatabase) {
+    this.mediaSources = new PostgresMediaSourceStore(sql);
+    this.actions = new PostgresActionStore(sql);
+    this.nativeTools = new PostgresNativeToolStore(sql);
     this.observations = new PostgresObservationStore(sql);
     this.information = new InformationRepository(sql);
     this.memoryGraph = new PostgresMemoryGraphStore(sql);
@@ -123,7 +161,11 @@ export class KaguyaDatabase {
 
   async prepareSchema(): Promise<void> {
     await prepareDatabaseSchema(this.sql);
+    await prepareMediaSourceSchema(this.sql);
     await prepareObservationSchema(this.sql);
+    await prepareActionSchema(this.sql);
+    await prepareNativeToolSchema(this.sql);
+    await prepareNativeMemoryToolSchema(this.sql);
   }
 
   async close(): Promise<void> {
@@ -136,3 +178,5 @@ export { ModelRequestMetricsRepository } from "./model-request-metrics.js";
 export { PostgresNativeVectorRetriever } from "./native-memory-vector.js";
 
 export { PostgresObservationStore } from "./observation-store.js";
+
+export * from "./inspection-reader.js";

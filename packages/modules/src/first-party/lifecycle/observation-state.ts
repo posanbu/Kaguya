@@ -2,10 +2,12 @@
  * 功能概述：Heartbeat 的开放观察投影与只读 Selector，调度提交仍由 index.ts 负责。
  * scopeOf 和 isImmediateObservation 使用 typed 来源判断范围与即时信号；Web conversationId 隔离浏览器会话，
  * 未携带会话 ID 的旧 Web 消息保持原范围键；openObservations 按终态过滤开放候选。
+ * 所有 owner/候选/旧水位均按完整 scene 过滤；旧 scope 仅作索引，无法解析的旧事实不会归给任一碰撞场景。
  * 三个 Selector 分别恢复 scope schedule、due 来源和观察水位；immediateInState 仅认可成功投递的引用目标。
  * 查询有界且不写账本，保持原有导出对象身份与 Scheduler/Router 外部契约。
  * 新消费者优先读取匹配 scene 的连续进度事实；旧 turn 水位仅用于尚无新进度事实的兼容查询。
  */
+import { resolveObservationAddress } from "./observation-scene.js";
 import { observationProgress } from "../observation.js";
 import { sceneIdentity, type SceneAddress } from "@kaguya/schema";
 import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
@@ -34,6 +36,25 @@ import {
   attentionArousalStateRecordedInformationKind,
   heartbeatScheduledInformationKind,
 } from "../information-kinds.js";
+async function addressFor(
+  ledger: InformationSelectorLedger,
+  atom: DeepReadonly<InformationAtom>,
+) {
+  return resolveObservationAddress(
+    atom,
+    async (id) => (await ledger.find({ informationIds: [id], limit: 1 }))[0],
+  );
+}
+async function sameScene(
+  ledger: InformationSelectorLedger,
+  atom: DeepReadonly<InformationAtom>,
+  address: SceneAddress,
+) {
+  const actual = await addressFor(ledger, atom);
+  return (
+    actual !== undefined && sceneIdentity(actual) === sceneIdentity(address)
+  );
+}
 /** A freeze alone is not an observation. Only an observe gate advances the observation watermark. */
 async function latestObservedContext(
   ledger: InformationSelectorLedger,
@@ -70,6 +91,7 @@ async function latestObservedContext(
     });
     for (const turn of turns) {
       if (turn.informationId === throughInformationId) continue;
+      if (address && !(await sameScene(ledger, turn, address))) continue;
       if (turn.kind === speechObservedInformationKind.kind) return turn;
       const decision = (
         await ledger.find({
@@ -114,38 +136,47 @@ export function scopeOf(source: ObservationSource): string {
 export const heartbeatScopeSelector = defineInformationSelector({
   selectorId: "agent.heartbeat.scope-schedules",
   select: async ({ sourceAtom, ledger }) => {
-    const source = (sourceAtom.payload as any).source;
-    const scopeKey = source
-      ? scopeOf(source)
-      : (sourceAtom.payload as any).scopeKey;
-    const schedules = await ledger.find({
-      kinds: [oneShotRequestedInformationKind.kind],
-      openOnly: true,
-      scopeKey,
-      order: "desc",
-      limit: 1,
-    });
-    for (const schedule of schedules) {
-      const input = (schedule.payload as any).input;
-      if (!input || input.scopeKey !== scopeKey) continue;
-      const terminal = await ledger.related({
-        from: [schedule.informationId],
-        relation: "core:status-of",
-        direction: "incoming",
-        limit: 1,
+    const address = await addressFor(ledger, sourceAtom);
+    if (!address) return [];
+    const scopeKey = scopeOf(address);
+    let throughInformationId: string | undefined;
+    for (;;) {
+      const schedules = await ledger.find({
+        kinds: [oneShotRequestedInformationKind.kind],
+        openOnly: true,
+        scopeKey,
+        registrationOrder: true,
+        order: "desc",
+        limit: 1000,
+        ...(throughInformationId ? { throughInformationId } : {}),
       });
-      if (terminal.length) continue;
-      const heartbeat = (
-        await ledger.related({
+      for (const schedule of schedules) {
+        if (
+          schedule.informationId === throughInformationId ||
+          !(await sameScene(ledger, schedule, address))
+        )
+          continue;
+        const terminal = await ledger.related({
           from: [schedule.informationId],
-          relation: "core:caused-by",
-          direction: "outgoing",
+          relation: "core:status-of",
+          direction: "incoming",
           limit: 1,
-        })
-      )[0];
-      return heartbeat === undefined
-        ? [schedule.informationId]
-        : [schedule.informationId, heartbeat.informationId];
+        });
+        if (terminal.length) continue;
+        const heartbeat = (
+          await ledger.related({
+            from: [schedule.informationId],
+            relation: "core:caused-by",
+            direction: "outgoing",
+            limit: 1,
+          })
+        )[0];
+        return heartbeat === undefined
+          ? [schedule.informationId]
+          : [schedule.informationId, heartbeat.informationId];
+      }
+      if (schedules.length < 1000) break;
+      throughInformationId = schedules.at(-1)!.informationId;
     }
     return [];
   },
@@ -196,18 +227,31 @@ export const observationTerminals = [
 export const heartbeatIdleBackoffSelector = defineInformationSelector({
   selectorId: "agent.heartbeat.idle-backoff",
   select: async ({ sourceAtom, ledger }) => {
-    const source = (sourceAtom.payload as any).source;
-    const scopeKey = source
-      ? scopeOf(source)
-      : (sourceAtom.payload as any).scopeKey;
-    if (!scopeKey) return [];
-    const terminals = await ledger.find({
-      kinds: observationTerminals.map((kind) => kind.kind),
-      scopeKey,
-      registrationOrder: true,
-      order: "desc",
-      limit: 100,
-    });
+    const address = await addressFor(ledger, sourceAtom);
+    if (!address) return [];
+    const scopeKey = scopeOf(address);
+    const terminals: DeepReadonly<InformationAtom>[] = [];
+    let throughInformationId: string | undefined;
+    for (;;) {
+      const page = await ledger.find({
+        kinds: observationTerminals.map((kind) => kind.kind),
+        scopeKey,
+        registrationOrder: true,
+        order: "desc",
+        limit: 1000,
+        ...(throughInformationId ? { throughInformationId } : {}),
+      });
+      for (const atom of page) {
+        if (
+          atom.informationId !== throughInformationId &&
+          (await sameScene(ledger, atom, address))
+        )
+          terminals.push(atom);
+        if (terminals.length === 100) break;
+      }
+      if (terminals.length === 100 || page.length < 1000) break;
+      throughInformationId = page.at(-1)!.informationId;
+    }
     const selected = [...terminals];
     const latest = terminals[0];
     if (latest) {
@@ -263,11 +307,12 @@ export const heartbeatDeferredObservationSelector = defineInformationSelector({
     });
     const latestByScope = new Map<string, DeepReadonly<InformationAtom>>();
     for (const outcome of outcomes) {
-      const scopeKey = String(outcome.payload.scopeKey ?? "");
-      if (scopeKey && !latestByScope.has(scopeKey))
-        latestByScope.set(scopeKey, outcome);
+      const address = await addressFor(ledger, outcome);
+      if (!address) continue;
+      const sceneId = sceneIdentity(address);
+      if (!latestByScope.has(sceneId)) latestByScope.set(sceneId, outcome);
     }
-    for (const [scopeKey, outcome] of latestByScope) {
+    for (const outcome of latestByScope.values()) {
       if (outcome.payload.outcome !== "defer") continue;
       const candidate = (
         await ledger.related({
@@ -288,6 +333,7 @@ export const heartbeatDeferredObservationSelector = defineInformationSelector({
       )[0];
       if (!runtimeContext) continue;
       const candidatePayload = candidate.payload as any;
+      const scopeKey = scopeOf(candidatePayload);
       const observed = await latestObservedContext(ledger, scopeKey, {
         platform: candidatePayload.platform,
         adapterId: candidatePayload.adapterId,
@@ -362,43 +408,42 @@ export const heartbeatObservationSelector = defineInformationSelector({
       )[0]!;
       if (!anchor) return [];
     }
-    const p = anchor.payload as any;
-    const source =
-      p.source ??
-      (p.platform
-        ? {
-            platform: p.platform,
-            adapterId: p.adapterId,
-            destination: p.destination,
-          }
-        : undefined);
-    const scopeKey = p.scopeKey ?? (source ? scopeOf(source) : undefined);
-    if (!scopeKey) return [];
-    const open = await ledger.find({
-      kinds: [turnCandidateInformationKind.kind],
-      scopeKey,
-      registrationOrder: true,
-      openOnly: true,
-      order: "desc",
-      limit: 1000,
-    });
-    const latest = await ledger.find({
-      kinds: [turnCandidateInformationKind.kind],
-      scopeKey,
-      registrationOrder: true,
-      order: "desc",
-      limit: 1,
-    });
+    const target = await addressFor(ledger, anchor);
+    if (!target) return [];
+    const scopeKey = scopeOf(target);
+    const payloadContains = JSON.parse(JSON.stringify(target));
+    const open = (
+      await ledger.find({
+        kinds: [turnCandidateInformationKind.kind],
+        scopeKey,
+        payloadContains,
+        registrationOrder: true,
+        openOnly: true,
+        order: "desc",
+        limit: 1000,
+      })
+    ).filter(
+      (a) =>
+        sceneIdentity(a.payload as unknown as SceneAddress) ===
+        sceneIdentity(target),
+    );
+    const latest = (
+      await ledger.find({
+        kinds: [turnCandidateInformationKind.kind],
+        scopeKey,
+        payloadContains,
+        registrationOrder: true,
+        order: "desc",
+        limit: 1000,
+      })
+    )
+      .filter(
+        (a) =>
+          sceneIdentity(a.payload as unknown as SceneAddress) ===
+          sceneIdentity(target),
+      )
+      .slice(0, 1);
     const candidate = latest[0];
-    const target =
-      source ??
-      (candidate
-        ? {
-            platform: candidate.payload.platform,
-            adapterId: candidate.payload.adapterId,
-            destination: candidate.payload.destination,
-          }
-        : undefined);
     const observed = await latestObservedContext(
       ledger,
       scopeKey,

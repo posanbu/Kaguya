@@ -1,4 +1,5 @@
 /**
+ * 候选竞争、claim 前驱和新 operation 槽按完整 scene 隔离，旧 claim 通过候选引用恢复并原样复用。
  * 候选新旧由 Selector 的账本注册顺序确定；相同/迟到业务时间及随机 UUID 不改变消费先后。
  * Light 的 message 决策只传目标与冻结引用。
  * manifest 声明 Light 模板；调用 compileLightPrompt 时传入装配阶段加载的 default/local 文本，不再使用代码内默认值。
@@ -26,7 +27,10 @@ import {
   recordSituationObservations,
   confirmSituationObservations,
 } from "../observation.js";
-import { observationCapability } from "@kaguya/sdk";
+import {
+  observationCapability,
+  actionRunValidityCapability,
+} from "@kaguya/sdk";
 import {
   frozenLifecycleSelector,
   lifecycleStateInformationKind,
@@ -73,6 +77,9 @@ import type { AgentIdentity, ModelTaskCapability } from "../heavy/index.js";
 import type { ModuleCapability } from "@kaguya/sdk";
 
 import {
+  sceneIdentity,
+  situationEvidenceRecordSchema,
+  type SceneAddress,
   jsonObjectSchema,
   type CompiledPrompt,
   type DeepReadonly,
@@ -217,28 +224,44 @@ const lightInterruptSelector = defineInformationSelector({
             }),
           )[0]
         : sourceAtom;
-    const source = (anchor?.payload as any)?.source;
+    const frozenAnchor =
+      anchor?.kind === attentionArousalCompletedInformationKind.kind
+        ? add(
+            await ledger.related({
+              from: [anchor.informationId],
+              relation: "core:uses-context",
+              direction: "outgoing",
+              limit: 100,
+            }),
+          ).find((a) => a.kind === turnContextCompletedInformationKind.kind)
+        : anchor;
+    const source = (frozenAnchor?.payload as any)?.source;
     if (!source) return [...selected.keys()];
     const scopeKey = scopeOf(source);
     const candidate = add(
       await ledger.find({
         kinds: [turnCandidateInformationKind.kind],
-        ...(sourceAtom.kind === "core.model.task.requested" &&
-        (anchor?.payload as any)?.candidateInformationId
+        ...((frozenAnchor?.payload as any)?.candidateInformationId
           ? {
               informationIds: [
-                String((anchor!.payload as any).candidateInformationId),
+                String((frozenAnchor!.payload as any).candidateInformationId),
               ],
             }
           : {
               scopeKey,
+              payloadContains: {
+                platform: source.platform,
+                adapterId: source.adapterId,
+                destination: source.destination,
+              },
               registrationOrder: true,
               order: "desc" as const,
             }),
         limit: 1,
       }),
     )[0];
-    if (!candidate) return [...selected.keys()];
+    if (!candidate || !sameScope(candidate.payload, source))
+      return [...selected.keys()];
     const claims = add(
       await ledger.related({
         from: [candidate.informationId],
@@ -464,19 +487,30 @@ export const routerStateSelector = defineInformationSelector({
       ];
     }
 
-    const scopes = new Set(
+    const scenes = new Map(
       anchors
         .filter(({ kind }) => kind === turnCandidateInformationKind.kind)
-        .map((atom) => (atom.payload as any).scopeKey as string),
+        .map((atom) => {
+          const payload = turnCandidateInformationKind.payloadSchema.parse(
+            atom.payload,
+          );
+          return [sceneIdentity(payload), payload] as const;
+        }),
     );
     const candidates = [...anchors];
-    for (const scopeKey of scopes) {
+    for (const payload of scenes.values()) {
+      const scopeKey = String(payload.scopeKey);
       let afterInformationId: string | undefined;
       for (;;) {
         const page = remember(
           await ledger.find({
             kinds: [turnCandidateInformationKind.kind],
             scopeKey,
+            payloadContains: {
+              platform: payload.platform,
+              adapterId: payload.adapterId,
+              destination: payload.destination,
+            },
             openOnly: true,
             registrationOrder: true,
             order: "asc",
@@ -545,16 +579,8 @@ function createRoutingModule(
   ] as const;
   const maybeInterruptLight = async (
     context: InformationModuleHandlerContext,
-    settings: DeepReadonly<RouterSettings>,
   ): Promise<boolean> => {
     const atoms = await context.select(lightInterruptSelector);
-    const source =
-      context.sourceAtom ??
-      atoms.find(
-        (atom) =>
-          atom.kind === inboundTextInformationKind.kind ||
-          atom.kind === attentionArousalCompletedInformationKind.kind,
-      );
     const candidate = atoms.find(
       (atom) => atom.kind === turnCandidateInformationKind.kind,
     );
@@ -581,7 +607,7 @@ function createRoutingModule(
       for (const requested of requests) {
         await context.use(options.modelTaskCapability).cancel({
           requestedInformationId: requested.informationId,
-          reason: "New message interrupted Light",
+          reason: "Persistent run invalidation interrupted Light",
         });
       }
       return true;
@@ -600,17 +626,22 @@ function createRoutingModule(
     );
     if (!frozen || !attention) return false;
     const attempt = Number((candidate.payload as any).rebuildAttempt ?? 0);
-    if (attempt >= settings.lightInterruptMaxConsecutiveCount) return false;
-    const consumed = new Set(
-      (frozen.payload.inputs as any[]).map((input) => input.informationId),
-    );
-    const incoming = atoms.filter(
-      (atom) =>
-        atom.kind === inboundTextInformationKind.kind &&
-        !consumed.has(atom.informationId),
-    );
-    const trigger = incoming.at(-1);
-    if (!trigger) return false;
+    const source = frozen.payload.source as any;
+    const d = source.destination;
+    const validity = await context
+      .use(actionRunValidityCapability)
+      .runValidity(
+        claim.informationId,
+        JSON.stringify([
+          source.platform,
+          source.adapterId,
+          d.kind,
+          d.userId ?? d.groupId ?? d.conversationId ?? null,
+        ]),
+      );
+    // 普通插话仅进入后续 observation，只有宿主已持久确认的干预才使旧规划失效。
+    if (validity.valid || !validity.causeInformationId) return false;
+    const trigger = { informationId: validity.causeInformationId };
     const runtime = atoms.find((atom) => atom.kind === "core.runtime.context");
     if (!runtime) return false;
     const winner = await context.commitTerminal(
@@ -658,7 +689,7 @@ function createRoutingModule(
     for (const requested of requests) {
       await context.use(options.modelTaskCapability).cancel({
         requestedInformationId: requested.informationId,
-        reason: "New message interrupted Light",
+        reason: "Persistent run invalidation interrupted Light",
       });
     }
     return true;
@@ -751,6 +782,7 @@ function createRoutingModule(
       promptRenderers: [],
       requires: [
         observationCapability,
+        actionRunValidityCapability,
         oneShotScheduleCapability,
         options.modelTaskCapability,
         options.rawContextCapability,
@@ -778,7 +810,7 @@ function createRoutingModule(
             delivery: "durable",
           },
           async (_atom, context) => {
-            await maybeInterruptLight(context, settings);
+            await maybeInterruptLight(context);
           },
         ),
         ...(options.modelTaskRequestedInformationKind
@@ -790,7 +822,7 @@ function createRoutingModule(
                   delivery: "durable",
                 },
                 async (_atom, context) => {
-                  await maybeInterruptLight(context, settings);
+                  await maybeInterruptLight(context);
                 },
               ),
             ]
@@ -885,9 +917,9 @@ function createRoutingModule(
                     },
                     overBudget: snapshot.overBudget,
                     characterCount: snapshot.characterCount,
-                    evidence: (snapshot.evidence ?? []).map((item) => ({
-                      ...item,
-                    })),
+                    evidence: (snapshot.evidence ?? []).map((item) =>
+                      situationEvidenceRecordSchema.parse(item),
+                    ),
                     through: snapshot.through ?? 0,
                   },
                 },
@@ -1263,7 +1295,7 @@ function createRoutingModule(
                 sourceAtom,
                 frozenSituation,
               );
-              if (await maybeInterruptLight(context, settings)) return;
+              if (await maybeInterruptLight(context)) return;
               const gate = {
                 ...decision.payload,
                 claimInformationId: claim.informationId,
@@ -1400,6 +1432,7 @@ function createRoutingModule(
                   contextAtoms: taskAtoms,
                 });
               if (result.status !== "completed") return;
+              if (await maybeInterruptLight(context)) return;
               const parsed =
                 result.status === "completed"
                   ? lightActionSchema.safeParse(result.output)
@@ -1687,10 +1720,14 @@ async function progressCandidates(
       !turnTerminalFor(a.informationId, atoms) &&
       a.payload.managementAuthorizationId === undefined,
   );
-  const scopes = new Set(candidates.map((a) => String(a.payload.scopeKey)));
-  for (const scope of scopes) {
-    // routerStateSelector 保证候选子序列按持久注册位置递增。
-    const open = candidates.filter((a) => a.payload.scopeKey === scope);
+  const scenes = new Set(
+    candidates.map((a) => sceneIdentity(a.payload as unknown as SceneAddress)),
+  );
+  for (const scene of scenes) {
+    // routerStateSelector 保证候选子序列按持久注册位置递增；旧 scope 不能决定跨场景竞争。
+    const open = candidates.filter(
+      (a) => sceneIdentity(a.payload as unknown as SceneAddress) === scene,
+    );
     const winner = open.at(-1)!;
     await progressCandidate(winner, atoms, settings, context);
     if (open.length < 2) continue;
@@ -1753,7 +1790,9 @@ async function progressCandidate(
     .filter(
       (atom) =>
         atom.kind === turnClaimedInformationKind.kind &&
-        (atom.payload as any).scopeKey === payload.scopeKey,
+        referenced(atom, "agent:turn-candidate", map).some((owner) =>
+          sameScope(owner.payload, payload),
+        ),
     )
     .sort(compareClaims);
   const latestClaim = claims.at(-1);
@@ -1835,30 +1874,33 @@ async function progressCandidate(
     latestClaim === undefined
       ? 0
       : ((latestClaim.payload as any).generation ?? 0) + 1;
-  const claim = await context.registerOnce(
-    "agent.router.turn.claim",
-    `${payload.scopeKey}:${predecessorId ?? "root"}`,
-    turnClaimedInformationKind,
-    {
-      payload: {
-        candidateInformationId: candidate.informationId,
-        scopeKey: payload.scopeKey,
-        generation,
-        predecessorTerminalInformationId: predecessorId ?? null,
-      },
-      references: [
-        ...effectiveSourceInformationIds.map((informationId) => ({
-          relation: "core:uses-context",
-          informationId,
-        })),
-        {
-          relation: "agent:turn-candidate",
-          informationId: candidate.informationId,
+  // 历史已认领候选继续使用原 claim；新操作槽采用无碰撞的 scene+前驱元组。
+  const claim =
+    ownClaim ??
+    (await context.registerOnce(
+      "agent.router.turn.claim",
+      JSON.stringify([sceneIdentity(payload), predecessorId ?? "root"]),
+      turnClaimedInformationKind,
+      {
+        payload: {
+          candidateInformationId: candidate.informationId,
+          scopeKey: payload.scopeKey,
+          generation,
+          predecessorTerminalInformationId: predecessorId ?? null,
         },
-      ],
-      contextInformationId: runtimeContext.informationId,
-    },
-  );
+        references: [
+          ...effectiveSourceInformationIds.map((informationId) => ({
+            relation: "core:uses-context",
+            informationId,
+          })),
+          {
+            relation: "agent:turn-candidate",
+            informationId: candidate.informationId,
+          },
+        ],
+        contextInformationId: runtimeContext.informationId,
+      },
+    ));
   if ((claim.payload as any).candidateInformationId !== candidate.informationId)
     return;
 

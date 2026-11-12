@@ -1,4 +1,12 @@
+/**
+ * 功能概述：情境工作台保留冻结 tick、输入和模型步骤，并在页内接入领域运行与来源检视。
+ * SituationPage 使用现有快照 hooks；DomainInspection 读取显式 scope/URL，绝不因刷新触发行动。
+ * 选择与轮询保留原行为；冻结召回链接携带来源范围，精确记忆正文通过领域证明接口读取。
+ */
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { DomainInspection } from "./DomainInspection.js";
+import { InspectionReference } from "./InspectionReference.js";
+import { readInspectionLocation } from "./inspection-navigation.js";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import {
   type SituationView,
@@ -148,7 +156,13 @@ function Step({ step }: { step: SituationStepView }) {
     </article>
   );
 }
-export function SituationPage({ token }: { token: string }) {
+export function SituationPage({
+  token,
+  location = "/situation",
+}: {
+  token: string;
+  location?: string;
+}) {
   const boardRef = useRef<HTMLDivElement>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [contextTier, setContextTier] = useState<"light" | "heavy">("heavy");
@@ -231,6 +245,35 @@ export function SituationPage({ token }: { token: string }) {
   }, [frame?.id]);
   return (
     <div className="situation-page" aria-label="情境工作台">
+      <details
+        className="situation-domain"
+        open={
+          new URLSearchParams(location.split("?")[1]).has("inspect") ||
+          undefined
+        }
+      >
+        <summary>运行与来源检视</summary>
+        <DomainInspection
+          token={token}
+          location={location}
+          defaultScope={frame?.current.sceneId ?? ""}
+        />
+      </details>
+      {planningContext.data?.nativeRunInformationId && (
+        <InspectionReference
+          reference={{
+            domain: "run",
+            id: planningContext.data.nativeRunInformationId,
+            relation: "所选请求的模型与工具运行",
+            availability: "available",
+          }}
+          location={location}
+          context={readInspectionLocation(
+            location,
+            frame?.current.sceneId ?? "",
+          )}
+        />
+      )}
       {data?.lifecycle && (
         <section className="situation-activity" aria-label="当前活动">
           <strong>

@@ -15,7 +15,9 @@ export {
   heavyResponseSilentInformationKind,
   filterDecisionInformationKind,
   assistantTextInformationKind,
+  authorizedAssistantOutputInformationKind,
   deliveryRequestedInformationKind,
+  messageOutputProcessorReady,
 } from "./kinds/message.js";
 export {
   turnClaimedInformationKind,

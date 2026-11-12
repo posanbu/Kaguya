@@ -1,4 +1,5 @@
 /**
+ * offlineFirstPartyKinds 仅导出静态声明，供不启动模块的离线升级核对完整 Kind 契约。
  * 公开独立 QQ 表情模块工厂，导入不执行收藏、下载或发送。
  * 导出跨会话批准/确认事实和窄 MessageAuthorization token，供 composition 与 Runtime 共享对象身份。
  * 授权消息渲染工厂供 composition 注入 Runtime，模板正文不再由宿主内嵌。
@@ -69,6 +70,8 @@ export {
 } from "./first-party/heavy/message-context.js";
 export {
   assistantTextInformationKind,
+  authorizedAssistantOutputInformationKind,
+  messageOutputProcessorReady,
   deliveryRequestedInformationKind,
   filterDecisionInformationKind,
   inboundTextInformationKind,
@@ -140,3 +143,5 @@ export {
   lifecycleStartedInformationKind,
 } from "./first-party/lifecycle/pulse.js";
 export { lifecycleStateInformationKind } from "./first-party/lifecycle/activity.js";
+
+export { offlineFirstPartyKinds } from "./offline-kinds.js";

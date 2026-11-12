@@ -1,0 +1,7 @@
+<!-- 固定应用菜单：命令在应用 UID 下运行，不经过可信控制服务执行。 -->
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="root-menu" label="Applications">
+    <item label="Terminal"><action name="Execute"><command>/usr/bin/xterm -fa monospace -fs 11</command></action></item>
+    <item label="Browser"><action name="Execute"><command>/usr/local/bin/node /opt/kaguya-tools/gui-browser.mjs</command></action></item>
+  </menu>
+</openbox_menu>

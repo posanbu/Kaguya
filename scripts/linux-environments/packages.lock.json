@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "platform": "ubuntu-26.04-amd64",
+  "observedAt": "2026-10-25",
+  "source": "https://mirrors.ustc.edu.cn/ubuntu",
+  "executionPackages": {
+    "podman": "5.7.0+ds2-3build1",
+    "golang-github-containers-common": "0.66.0+ds2-3",
+    "uidmap": "1:4.17.4-2ubuntu3",
+    "passt": "0.0~git20260120.386b5f5-1",
+    "crun": "1.21-1ubuntu3",
+    "fuse-overlayfs": "1.14-1build2"
+  },
+  "systemCompatibility": {
+    "python3": {
+      "minimum": "3.12",
+      "maximumExclusive": "3.15",
+      "observedPackage": "3.14.3-0ubuntu2",
+      "observedInterpreter": "3.14.4"
+    },
+    "e2fsprogs": {
+      "minimum": "1.47",
+      "maximumExclusive": "2",
+      "observedPackage": "1.47.2-3ubuntu4"
+    },
+    "util-linux": {
+      "minimum": "2.39",
+      "maximumExclusive": "3",
+      "observedPackage": "2.41.3-3ubuntu2.2"
+    },
+    "dbus-user-session": {
+      "minimum": "1.14",
+      "maximumExclusive": "2",
+      "observedPackage": "1.16.2-2ubuntu4"
+    },
+    "libpam-systemd": {
+      "minimum": "255",
+      "maximumExclusive": "300",
+      "observedPackage": "259.5-0ubuntu3.4"
+    },
+    "acl": {
+      "minimum": "2.3",
+      "maximumExclusive": "3",
+      "observedPackage": "2.3.2-2"
+    },
+    "nftables": {
+      "minimum": "1.0",
+      "maximumExclusive": "2",
+      "observedPackage": "1.1.6-1"
+    }
+  },
+  "observedCaCertificates": "20260816ubuntu0.26.04.1",
+  "policy": "Pin only the reviewed execution stack; retain compatible installed OS packages and record their actual versions. No global apt hold and no downgrade."
+}
