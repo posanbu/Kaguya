@@ -593,14 +593,14 @@ button:disabled {
 }
 
 .setup-shell .secondary-button {
-  border-color: #e2d2c4;
-  color: #694c3b;
+  border-color: var(--kaguya-input-line);
+  color: var(--kaguya-ink);
 }
 
 .setup-shell .secondary-button:hover:not(:disabled) {
-  border-color: #df6f28;
-  background: #fff8f1;
-  color: #a94b1a;
+  border-color: var(--kaguya-input-focus);
+  background: var(--kaguya-hover-surface);
+  color: var(--kaguya-ink);
 }
 
 .setup-shell .setup-status-card > svg {
