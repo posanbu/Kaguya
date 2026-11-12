@@ -1,4 +1,5 @@
 /**
+ * 冻结上下文门禁覆盖千条输入、Light/Heavy 持久请求分页与缺失授权，使用真实 Selector 和数据库。
  * GUI 门禁包括原始图片 SDK 请求体、固定模型恢复以及人工控制丢回执与清理。
  * 功能概述：将 PR 必须执行的集成测试列为关键门禁，复用根 Vitest 配置和分片策略。
  * 主要职责：criticalTests 固定完整文件清单；校验文件存在后合并配置，禁止按用例名称缩小范围。
@@ -43,6 +44,8 @@ const criticalTests = [
   "packages/modules/src/first-party/memory-native/index.test.ts",
   "packages/modules/src/first-party/memory-native/recovery.test.ts",
   "packages/modules/src/first-party/heavy/recall.test.ts",
+  "packages/modules/src/first-party/heavy/message-context.test.ts",
+  "packages/modules/src/first-party/heavy/frozen-context-persistence.test.ts",
   "packages/modules/src/first-party/memory-native/formation.test.ts",
   "packages/modules/src/first-party/memory-native/prompt.test.ts",
   "packages/runtime/src/observation-runtime.test.ts",

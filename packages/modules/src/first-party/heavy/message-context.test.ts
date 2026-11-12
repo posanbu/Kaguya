@@ -1,12 +1,6 @@
 /**
  * 功能概述：验证编写选择器完整保留冻结 turn，不将最后一条消息替换为 intent 的复制正文。
- * 主要职责：测试完整输入授权、历史 cutoff、已投递 assistant 过滤、引用链溯源及跨作用域/失败/未来/歧义拒绝。
- * 知识导航产生的原始记忆即使已在冻结引用内，仍必须通过目标范围和截止时间检查。
- * 代码库关系：调用真实 turnMessageContextSelector，ledger fixture 仅提供授权事实与查询结果。
- * 输入输出与副作用：只读内存样本并记录查询，无数据库或网络。
- */
-/**
- * 功能概述：验证编写选择器完整保留冻结 turn，不将最后一条消息替换为 intent 的复制正文。
+ * 覆盖 1,000 条输入及跨三页引用，使用真实 Selector 执行器验证授权、缺失拒绝和原因链。
  * 主要职责：测试完整输入授权、历史 cutoff、已投递 assistant 过滤、引用链溯源及跨作用域/失败/未来/歧义拒绝。
  * 知识导航产生的原始记忆即使已在冻结引用内，仍必须通过目标范围和截止时间检查。
  * 代码库关系：调用真实 turnMessageContextSelector，ledger fixture 仅提供授权事实与查询结果。
@@ -14,7 +8,16 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { InformationSelectorContext } from "@kaguya/sdk";
-import { turnMessageContextSelector } from "./message-context.js";
+import {
+  FrozenContextIntegrityError,
+  frozenContextFailure,
+  turnMessageContextSelector,
+} from "./message-context.js";
+import {
+  InformationSelectorExecutor,
+  type InformationLedger,
+} from "@kaguya/engine";
+import { lightContextSelector } from "../router/light.js";
 import { atom, fixture, target } from "./test-fixtures.js";
 import { assistantTextInformationKind } from "../information-kinds.js";
 
@@ -443,3 +446,144 @@ it("retains lookup ambiguity evidence when recent history contains only one matc
   expect(ids).toContain(first.informationId);
   expect(ids).toContain(second.informationId);
 });
+
+it.each([2000, 2036])(
+  "loads all frozen inputs across %i authorized references",
+  async (count) => {
+    const f = fixture(Array.from({ length: 1000 }, (_, i) => `body-${i}`));
+    const extra = Array.from({ length: count - 1000 }, (_, i) =>
+      atom(`context-${i}`, "test.context", {}),
+    );
+    const refs = [...extra, ...f.messages];
+    const turn = atom(
+      f.turn.informationId,
+      f.turn.kind,
+      { ...f.turn.payload, memory: [extra.at(-1)!.informationId] },
+      refs.map((a) => ({
+        relation: "core:uses-context",
+        informationId: a.informationId,
+      })),
+    );
+    const atoms = [turn, ...refs];
+    const byId = new Map(atoms.map((a) => [a.informationId, a]));
+    const store = {
+      get: async (id: string) => byId.get(id),
+      getMany: vi.fn(async (ids: readonly string[]) =>
+        ids.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : [])),
+      ),
+      find: async () => [],
+      query: async () => [],
+    } as unknown as InformationLedger;
+    const executor = new InformationSelectorExecutor(store);
+    const selected = await executor.select(
+      lightContextSelector,
+      turn.informationId,
+    );
+    const ids = selected.map((a) => a.informationId);
+    expect(f.messages.every((a) => ids.includes(a.informationId))).toBe(true);
+    expect(ids).toContain(extra.at(-1)!.informationId);
+    expect(new Set(ids).size).toBe(ids.length);
+    const broken = quoteAtom(
+      turn.informationId,
+      turn.kind,
+      turn.payload,
+      turn.references.filter(
+        (r) => r.informationId !== f.messages.at(-1)!.informationId,
+      ),
+    );
+    byId.set(turn.informationId, broken);
+    const error = await executor
+      .select(lightContextSelector, turn.informationId)
+      .catch((e) => e);
+    expect(frozenContextFailure(error)).toBeInstanceOf(
+      FrozenContextIntegrityError,
+    );
+    expect(frozenContextFailure(error)?.code).toBe("missing-input");
+  },
+);
+
+it("classifies only explicit frozen integrity errors through selector causes", () => {
+  const failure = new FrozenContextIntegrityError(
+    "missing-memory",
+    "Missing frozen memory reference",
+  );
+  expect(frozenContextFailure(new Error("selector", { cause: failure }))).toBe(
+    failure,
+  );
+  expect(
+    frozenContextFailure(new Error("database temporarily unavailable")),
+  ).toBeUndefined();
+  const cycle = new Error("cycle");
+  cycle.cause = cycle;
+  expect(frozenContextFailure(cycle)).toBeUndefined();
+});
+
+it.each(["light", "heavy"])(
+  "restores all persisted %s references and classifies missing referenced records",
+  async (role) => {
+    const f = fixture(["one"]);
+    const extra = Array.from({ length: 2036 }, (_, i) =>
+      atom(`persisted-${i}`, "test.context", {}),
+    );
+    const request = atom(
+      "request",
+      "core.model.task.requested",
+      {
+        taskId: role === "light" ? "agent.light.decide" : "agent.heavy.respond",
+        contextInformationIds: extra.map((a) => a.informationId),
+      },
+      extra.map((a) => ({
+        relation: "core:uses-context",
+        informationId: a.informationId,
+      })),
+    );
+    const byId = new Map(
+      [f.intent, f.turn, ...f.messages, request, ...extra].map((a) => [
+        a.informationId,
+        a,
+      ]),
+    );
+    const store = {
+      get: async (id: string) => byId.get(id),
+      getMany: async (ids: readonly string[]) =>
+        ids.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : [])),
+      find: async () => [],
+      query: async (q: { informationId: string; relation?: string }) =>
+        q.informationId ===
+          (role === "light" ? f.turn.informationId : f.intent.informationId) &&
+        q.relation === "core:caused-by"
+          ? [byId.get(request.informationId)!]
+          : [],
+    } as unknown as InformationLedger;
+    const executor = new InformationSelectorExecutor(store);
+    const selector =
+      role === "light" ? lightContextSelector : turnMessageContextSelector;
+    const source =
+      role === "light" ? f.turn.informationId : f.intent.informationId;
+    const selected = await executor.select(selector, source);
+    expect(
+      selected
+        .filter((a) => a.informationId.startsWith("persisted-"))
+        .map((a) => a.informationId),
+    ).toEqual(extra.map((a) => a.informationId));
+    byId.set(
+      request.informationId,
+      quoteAtom(
+        request.informationId,
+        request.kind,
+        { ...request.payload, contextInformationIds: ["unauthorized-context"] },
+        request.references,
+      ),
+    );
+    const invalid = await executor.select(selector, source).catch((e) => e);
+    expect(frozenContextFailure(invalid)?.code).toBe(
+      "missing-persisted-context",
+    );
+    byId.set(request.informationId, request);
+    byId.delete(extra.at(-1)!.informationId);
+    const error = await executor.select(selector, source).catch((e) => e);
+    expect(frozenContextFailure(error)?.code).toBe(
+      "missing-referenced-information",
+    );
+  },
+);

@@ -1,4 +1,6 @@
 /**
+ * 验证无限重试中的确定性错误只执行一次、临时故障继续恢复，诊断按源/订阅/类别去重且不泄露异常正文。
+ * PGlite 与 KAGUYA_TEST_DATABASE_URL 指定的隔离 PostgreSQL schema 共用本套测试。
  * 功能概述：验证可靠执行器的持久恢复、输出后重投、耗尽和停止 fencing。
  * 覆盖慢后台订阅尚未结束时在线多步消费仍独立推进，并约束每订阅单一在途 claim。
  * 主要职责：使用生产数据库，控制 handler 的失败/阻塞来覆盖真实执行窗口；
@@ -10,7 +12,16 @@ import { afterEach, expect, it, vi } from "vitest";
 import { z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 import * as engine from "@kaguya/engine";
-import { createTestingDatabase } from "./testing.js";
+import {
+  createTestingDatabase,
+  createPostgresTestingDatabase,
+} from "./testing.js";
+const waitFor: typeof vi.waitFor = (callback, options) =>
+  vi.waitFor(callback, {
+    timeout: 8000,
+    interval: 20,
+    ...(typeof options === "number" ? { timeout: options } : options),
+  });
 const source = defineInformationKind({
   kind: "test.source",
   displayName: "Test Source",
@@ -32,7 +43,9 @@ afterEach(async () => {
   for (const close of clean.splice(0).reverse()) await close();
 });
 async function setup() {
-  const db = await createTestingDatabase();
+  const db = process.env.KAGUYA_TEST_DATABASE_URL
+    ? await createPostgresTestingDatabase(process.env.KAGUYA_TEST_DATABASE_URL)
+    : await createTestingDatabase();
   clean.push(() => db.close());
   await db.prepareSchema();
   const registry = new engine.InformationKindRegistry();
@@ -81,7 +94,7 @@ it("replays output-before-ack failure without duplicating output", async () => {
   clean.push(() => runner.stop());
   await runner.start();
   await core.register(source, input());
-  await vi.waitFor(async () => {
+  await waitFor(async () => {
     expect(calls).toBe(2);
     expect((await db.information.reliable.health()).pending).toBe(0);
   });
@@ -112,7 +125,7 @@ it("bounds poison retries and persists visible exhaustion", async () => {
   clean.push(() => runner.stop());
   await runner.start();
   await core.register(source, input());
-  await vi.waitFor(async () =>
+  await waitFor(async () =>
     expect((await db.information.reliable.health()).exhausted).toBe(1),
   );
   expect(calls).toBe(2);
@@ -159,12 +172,14 @@ it.each([false, true])(
         },
       ],
     });
+    clean.push(() => first.stop());
+    clean.push(async () => release());
     await first.start();
     await core.register(source, input());
-    await vi.waitFor(() => expect(entered).toBe(true));
+    await waitFor(() => expect(entered).toBe(true));
     await first.stop({ drain });
     release();
-    await vi.waitFor(() => expect(lateRejected).toBe(true));
+    await waitFor(() => expect(lateRejected).toBe(true));
     const second = new engine.ReliableInformationRunner({
       core,
       pollIntervalMs: 5,
@@ -185,7 +200,7 @@ it.each([false, true])(
     });
     clean.push(() => second.stop());
     await second.start();
-    await vi.waitFor(async () =>
+    await waitFor(async () =>
       expect((await db.information.reliable.health()).pending).toBe(0),
     );
     expect(
@@ -216,7 +231,7 @@ it("exhausts handlers that ignore lease abort without running forever", async ()
   clean.push(() => runner.stop());
   await runner.start();
   await core.register(source, input());
-  await vi.waitFor(
+  await waitFor(
     async () =>
       expect((await db.information.reliable.health()).exhausted).toBe(1),
     { timeout: 3000 },
@@ -260,9 +275,11 @@ it("propagates shutdown into a pending exhaustion commit", async () => {
       },
     ],
   });
+  clean.push(() => runner.stop());
+  clean.push(async () => release());
   await runner.start();
   await core.register(source, input());
-  await vi.waitFor(() => expect(entered).toBe(true));
+  await waitFor(() => expect(entered).toBe(true));
   await runner.stop();
   release();
   await finished;
@@ -291,7 +308,7 @@ it("gives the default claim enough time for a 300 second model call and commit",
   clean.push(() => runner.stop());
   await runner.start();
   await core.register(source, input());
-  await vi.waitFor(() => expect(called).toBe(true));
+  await waitFor(() => expect(called).toBe(true));
   expect(claim).toHaveBeenCalledWith("test.timeout-budget", 330_000);
 });
 
@@ -374,9 +391,9 @@ it("advances other subscriptions while a background provider is still running", 
   clean.push(() => runner.stop());
   await runner.start();
   await core.register(source, input());
-  await vi.waitFor(() => expect(finished).toBe(1));
+  await waitFor(() => expect(finished).toBe(1));
   await core.register(source, input());
-  await vi.waitFor(() => expect(finished).toBe(2));
+  await waitFor(() => expect(finished).toBe(2));
   expect(slowCalls).toBe(1);
 });
 
@@ -464,4 +481,87 @@ it("reads one open result beyond 2000 historical candidates using the partial sc
       limit: 10,
     }),
   ).toHaveLength(1);
+});
+
+it("terminates missing-record failures despite retryForever and persists a safe cause", async () => {
+  const { core, db } = await setup();
+  const handle = vi.fn(async () => {
+    throw new Error("private body", {
+      cause: new engine.SelectedInformationMissingError(
+        "test.selector",
+        "private-id",
+      ),
+    });
+  });
+  const runner = new engine.ReliableInformationRunner({
+    core,
+    pollIntervalMs: 5,
+    subscriptions: [
+      {
+        subscriptionId: "test.integrity",
+        kind: source.kind,
+        retryForever: true,
+        handle,
+      },
+    ],
+  });
+  clean.push(() => runner.stop());
+  await runner.start();
+  await core.register(source, input());
+  await waitFor(async () =>
+    expect((await db.information.reliable.health()).exhausted).toBe(1),
+  );
+  expect(handle).toHaveBeenCalledTimes(1);
+  const failures = await db.information.find({
+    kinds: ["consumer.failed"],
+    limit: 10,
+  });
+  expect(failures).toHaveLength(1);
+  expect(failures[0]!.payload).toMatchObject({
+    error: { errorType: "missing-referenced-information" },
+  });
+  expect(JSON.stringify(failures)).not.toContain("private");
+});
+
+it("retries transient failures with one diagnostic and one idempotent output", async () => {
+  const { core, db } = await setup();
+  let calls = 0;
+  const runner = new engine.ReliableInformationRunner({
+    core,
+    pollIntervalMs: 5,
+    retryDelayMs: 0,
+    subscriptions: [
+      {
+        subscriptionId: "test.transient",
+        kind: source.kind,
+        retryForever: true,
+        handle: async (atom) => {
+          await core.registerOnce(
+            "test.transient.output",
+            atom.informationId,
+            output,
+            input(),
+          );
+          if (++calls < 3) throw new Error("secret token and body");
+        },
+      },
+    ],
+  });
+  clean.push(() => runner.stop());
+  await runner.start();
+  await core.register(source, input());
+  await waitFor(async () => {
+    expect(calls).toBe(3);
+    expect((await db.information.reliable.health()).pending).toBe(0);
+  });
+  expect(
+    await db.information.find({ kinds: [output.kind], limit: 10 }),
+  ).toHaveLength(1);
+  const failures = await db.information.find({
+    kinds: ["consumer.failed"],
+    limit: 10,
+  });
+  expect(failures).toHaveLength(1);
+  expect(JSON.stringify(failures)).not.toContain("secret");
+  expect((await db.information.reliable.health()).exhausted).toBe(0);
 });

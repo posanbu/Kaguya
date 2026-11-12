@@ -1,6 +1,11 @@
 /**
  * 碰撞场景回归在第一场景意图尚未投递时打开第二场景，确认独立 claim、意图及无跨场景 supersede。
  * 迟到候选按注册顺序接续已完成回合，事件发生时间只影响语义积压，不倒置候选优先级。
+ * 设置 KAGUYA_TEST_DATABASE_URL 时在隔离 PostgreSQL schema 运行同一套持久化测试。
+ * 冻结后 ack 失败触发真实重投，验证恢复复用已有快照、模型只执行一次且后续会话继续。
+ * 延迟 Identity 的双消息回归等待真实 claim 与每次 ACK，验证触发事件不能改变输入登记顺序。
+ * 冻结引用校验失败持久化原因终态并释放会话；后续机会仍可进入 Light。
+ * Light 派发读取独立冻结回合；查询不加载输入身份或开放候选，工作量不随同场景积压增长。
  * 功能概述：通过真实 InformationCore/PGlite 验证先观察再冻结上下文、Light 分派和唯一终态。
  * 主要职责：fixture 安装 Router 与受控模型能力；appendOpportunity/decide 构造通知与观察事实；
  * waitFor/settle 按 8 秒持久化预算等待事实或 durable 队列收敛，否定断言不依赖固定休眠。
@@ -10,15 +15,20 @@
  * 模型替身入口断言观察成功及持久 claim/run 已存在、行动意图尚未创建；观察能力使用真实数据库实现。
  * 合成输出链验证授权/合成中间节点后的投递终态归属，包括旧式因果链、直接 claim 引用及未知结果。
  */
+import { FrozenContextIntegrityError } from "../heavy/message-context.js";
 import { closeTestResources } from "../test-support/cleanup.js";
 import {
   observationCapability,
   actionRunValidityCapability,
 } from "@kaguya/sdk";
 import { afterEach, expect, it, vi } from "vitest";
-import { createTestingDatabase } from "@kaguya/database/testing";
+import {
+  createTestingDatabase,
+  createPostgresTestingDatabase,
+} from "@kaguya/database/testing";
 import {
   InformationCore,
+  InvalidInformationSelectionError,
   InformationKindRegistry,
   ModuleHost,
   executionExhaustedInformationKind,
@@ -42,6 +52,7 @@ import {
   createRouterModule,
   createSituationRuntimeModule,
   routerStateSelector,
+  lightDispatchSelector,
 } from "./index.js";
 import { focusOpened } from "../router/focus-facts.js";
 import { scopeOf } from "../heartbeat/observation.js";
@@ -151,7 +162,9 @@ async function fixture(
     ) => Promise<void>;
   } = {},
 ) {
-  const database = await createTestingDatabase();
+  const database = process.env.KAGUYA_TEST_DATABASE_URL
+    ? await createPostgresTestingDatabase(process.env.KAGUYA_TEST_DATABASE_URL)
+    : await createTestingDatabase();
   clean.push(() => database.close());
   await database.prepareSchema();
   const execute = vi.fn(async (request: any) => {
@@ -628,6 +641,60 @@ it("persists the observation and run identity before model execution can create 
   await decide(f.core, opportunity.candidate, "observe");
   await settle(f.database);
   expect(checked).toBe(true);
+}, 25000);
+
+it("dispatches from the frozen claim without rehydrating inputs or open candidates", async () => {
+  const f = await fixture({
+    action: { action: "silent", reason: "no-response-needed" },
+  });
+  const opportunity = await appendOpportunity(f.core, {
+    texts: ["first", "second"],
+  });
+  await decide(f.core, opportunity.candidate, "observe");
+  await settle(f.database);
+  const decision = (await all(f.database)).find(
+    (atom: any) => atom.kind === "agent.light.decision.completed",
+  )!;
+  expect(decision).toBeDefined();
+  const queries: any[] = [];
+  const selected = await f.core.select(
+    {
+      ...lightDispatchSelector,
+      select: (context) =>
+        lightDispatchSelector.select({
+          ...context,
+          ledger: {
+            ...context.ledger,
+            find: async (query) => {
+              queries.push(query);
+              return context.ledger.find(query);
+            },
+            related: async (query) => {
+              queries.push(query);
+              return context.ledger.related(query);
+            },
+          },
+        }),
+    },
+    decision.informationId,
+  );
+  expect(
+    selected.filter(
+      (atom) => atom.kind === turnContextCompletedInformationKind.kind,
+    ),
+  ).toHaveLength(1);
+  expect(
+    selected.filter((atom) => atom.kind === turnSilentInformationKind.kind),
+  ).toHaveLength(1);
+  expect(
+    selected.some(
+      (atom) =>
+        atom.kind === inboundTextInformationKind.kind ||
+        atom.kind === personContextCompletedInformationKind.kind,
+    ),
+  ).toBe(false);
+  expect(queries.length).toBeLessThanOrEqual(5);
+  expect(queries.every((query) => query.from !== undefined)).toBe(true);
 }, 25000);
 
 it("freezes before attention and defer does not call Light or advance progress", async () => {
@@ -1111,3 +1178,138 @@ it.each([
   },
   25000,
 );
+
+it("closes invalid frozen context and processes the next opportunity in the same scope", async () => {
+  const { core, database, execute } = await fixture({
+    action: { action: "silent", reason: "no-response-needed" },
+  });
+  const original = core.select.bind(core);
+  let rejected = false;
+  const selection = vi
+    .spyOn(core, "select")
+    .mockImplementation(async (...args) => {
+      if (!rejected && args[0].selectorId === "agent.router.light-context") {
+        rejected = true;
+        throw new InvalidInformationSelectionError(
+          args[0].selectorId,
+          new FrozenContextIntegrityError(
+            "missing-input",
+            "Missing frozen turn input reference",
+          ),
+        );
+      }
+      return original(...args);
+    });
+  try {
+    const first = await appendOpportunity(core, {
+      texts: ["invalid frozen input"],
+    });
+    await settle(database);
+    const failed = (await all(database)).filter(
+      (a: any) => a.kind === "agent.router.turn.failed",
+    );
+    expect(failed).toHaveLength(1);
+    expect(failed[0].payload).toMatchObject({
+      candidateInformationId: first.candidate.informationId,
+      reason: "frozen-context-missing-input",
+    });
+    expect(execute).not.toHaveBeenCalled();
+    const next = await appendOpportunity(core, {
+      texts: ["subsequent valid input"],
+    });
+    await decide(core, next.candidate, "observe");
+    await settle(database);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(
+      (await all(database)).filter(
+        (a: any) =>
+          a.kind === turnSilentInformationKind.kind &&
+          a.payload.candidateInformationId === next.candidate.informationId,
+      ),
+    ).toHaveLength(1);
+    expect((await database.information.reliable.health()).exhausted).toBe(0);
+  } finally {
+    selection.mockRestore();
+  }
+}, 25000);
+
+it("recovers a committed freeze after ack failure without repeating Light and accepts later input", async () => {
+  const { core, database, execute } = await fixture({
+    action: { action: "silent", reason: "no-response-needed" },
+  });
+  const originalAck = database.information.reliable.ack.bind(
+    database.information.reliable,
+  );
+  let failedAck = false;
+  const ack = vi
+    .spyOn(database.information.reliable, "ack")
+    .mockImplementation(async (claim) => {
+      if (
+        !failedAck &&
+        claim.subscriptionId.endsWith(
+          ":agent.router.observe.agent.router.turn.context.completed",
+        )
+      ) {
+        failedAck = true;
+        throw new Error("simulated lost acknowledgement");
+      }
+      return originalAck(claim);
+    });
+  try {
+    const first = await appendOpportunity(core, {
+      texts: ["recover this frozen turn"],
+    });
+    await decide(core, first.candidate, "observe");
+    await settle(database);
+    expect(failedAck).toBe(true);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(
+      (await all(database)).filter(
+        (a: any) => a.kind === "agent.situation.frozen",
+      ),
+    ).toHaveLength(1);
+    const next = await appendOpportunity(core, {
+      texts: ["new message after recovery"],
+    });
+    await decide(core, next.candidate, "observe");
+    await settle(database);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(
+      (await all(database)).filter(
+        (a: any) => a.kind === "agent.situation.frozen",
+      ),
+    ).toHaveLength(2);
+    expect(
+      (await all(database)).filter(
+        (a: any) => a.kind === turnSilentInformationKind.kind,
+      ),
+    ).toHaveLength(2);
+  } finally {
+    ack.mockRestore();
+  }
+}, 30000);
+
+it("freezes a multi-message claim when the last Identity event arrives after the claim", async () => {
+  const { core, database } = await fixture();
+  const opportunity = await appendOpportunity(core, {
+    texts: ["first pending", "last pending"],
+    identities: false,
+  });
+  await settle(database);
+  for (const input of opportunity.unread) {
+    await appendIdentity(
+      core,
+      opportunity.context.informationId,
+      input.informationId,
+      input.occurredAt,
+    );
+    await settle(database);
+  }
+  const contexts = (await all(database)).filter(
+    (a: any) => a.kind === turnContextCompletedInformationKind.kind,
+  );
+  expect(contexts).toHaveLength(1);
+  expect(contexts[0].payload.inputs.map((a: any) => a.informationId)).toEqual(
+    opportunity.unread.map((a) => a.informationId),
+  );
+}, 30000);

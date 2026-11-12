@@ -1,4 +1,5 @@
 /**
+ * PostgreSQL 清单包含 Router 冻结失败闭合与重投恢复回归，使用隔离 schema 检查真实持久化。
  * 功能概述：暴露 postgres:start/status/check、默认开发启动和真实 PostgreSQL 测试入口。
  * 主要职责：解析稳定命令与可选端口，尝试数据库准备后启动 Server，测试入口仍要求数据库就绪，并转发
  * SIGINT/SIGTERM；测试 URL 只注入子进程，普通输出不打印连接串或凭据。
@@ -34,6 +35,9 @@ import {
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(serverRoot, "../..");
 export const POSTGRES_TEST_FILES = [
+  "packages/modules/src/first-party/heavy/frozen-context-persistence.test.ts",
+  "packages/database/src/reliable-runner.test.ts",
+  "packages/modules/src/first-party/router/index.test.ts",
   "apps/server/src/mcp-host.test.ts",
   "apps/server/src/inspection-domain.test.ts",
   "apps/server/src/issue279-replay.test.ts",

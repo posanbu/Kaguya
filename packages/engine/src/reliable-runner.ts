@@ -6,8 +6,10 @@
  * DEFAULT_LEASE_MS 采用 330 秒，覆盖配置允许的 300 秒模型调用并为持久化提交留出 30 秒；
  * 显式 leaseMs 仍用于其他执行场景与测试。stop({ drain: true }) 先停止领取并有界等待
  * 所有在途订阅，再发送 shutdown abort 释放未完成 claim，供配置热应用保留任务唯一性。
+ * 显式完整性错误即使 retryForever 也耗尽；每种失败原因通过 Core 去重记录安全诊断，临时故障仍重试。
  * 输入输出与副作用：后台轮询执行持久化 I/O，所有 rejection 均被消费；不记录正文或原始错误。
  */
+import { informationIntegrityFailure } from "@kaguya/sdk";
 import type { DeepReadonly, InformationAtom } from "@kaguya/schema";
 import type { InformationCore } from "./information-core.js";
 import type {
@@ -184,7 +186,10 @@ export class ReliableInformationRunner {
     ]);
     let removeAbort = () => {};
     try {
-      if (!subscription.retryForever && claim.attempt > (this.#options.maxAttempts ?? 3)) {
+      if (
+        !subscription.retryForever &&
+        claim.attempt > (this.#options.maxAttempts ?? 3)
+      ) {
         await this.#options.core.exhaustClaim({ ...claim, signal });
         return;
       }
@@ -203,8 +208,8 @@ export class ReliableInformationRunner {
       await Promise.race([work, aborted]);
       signal.throwIfAborted();
       await this.#ledger.ack(claim);
-    } catch {
-      await this.fail(claim, signal, controller.signal, subscription);
+    } catch (error) {
+      await this.fail(claim, signal, controller.signal, subscription, error);
     } finally {
       removeAbort();
       clearTimeout(leaseTimer);
@@ -215,17 +220,26 @@ export class ReliableInformationRunner {
     signal: AbortSignal,
     subscriptionSignal: AbortSignal,
     subscription: ReliableInformationSubscription,
+    error: unknown,
   ): Promise<void> {
     if (this.#shutdown.signal.aborted || subscriptionSignal.aborted) {
       await this.#ledger.release(claim);
       return;
     }
     if (signal.aborted) return; // 过期 claim 留给下一次领取，不能由旧持有者更改。
-    if (!subscription.retryForever && claim.attempt >= (this.#options.maxAttempts ?? 3)) {
+    await this.#options.core.recordReliableFailure({ ...claim, signal }, error);
+    if (
+      informationIntegrityFailure(error) ||
+      (!subscription.retryForever &&
+        claim.attempt >= (this.#options.maxAttempts ?? 3))
+    ) {
       await this.#options.core.exhaustClaim({ ...claim, signal });
       return;
     }
-    await this.#ledger.retry(claim, subscription.retryDelayMs ?? this.#options.retryDelayMs ?? 100);
+    await this.#ledger.retry(
+      claim,
+      subscription.retryDelayMs ?? this.#options.retryDelayMs ?? 100,
+    );
   }
 }
 async function boundedWait(
