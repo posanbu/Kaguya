@@ -1,3 +1,4 @@
+import { featurePresentation } from "./feature-status.js";
 import { useRead } from "./use-read.js";
 /**
  * 功能概述：工作台概览展示基础设施状态，并提供 Memory 与 NapCat 的待重启开关。
@@ -142,6 +143,7 @@ function FeatureTile({
   icon: Icon,
   feature,
   busy,
+  failed,
   onSwitch,
   onDetails,
   meta,
@@ -150,33 +152,22 @@ function FeatureTile({
   icon: LucideIcon;
   feature: FeatureStatus | undefined;
   busy: boolean;
+  failed: boolean;
   onSwitch: (enabled: boolean) => void;
   onDetails: () => void;
   meta?: string;
 }) {
   const blocked = feature?.blocker === "recovery_failed";
-  const status = !feature
-    ? "读取中"
-    : busy
-      ? "切换中"
-      : feature.lifecycle === "retrying"
-        ? "已开启，重连中"
-        : feature.enabled !== feature.active
-          ? "待重启生效"
-          : feature.active
-            ? "运行中"
-            : feature.enabled
-              ? "启动失败"
-              : "已关闭";
+  const presentation = featurePresentation(feature, busy, failed);
   return (
     <article
-      className={`overview-tile overview-feature-tile overview-tile-${feature?.active ? "success" : feature?.enabled ? "error" : "neutral"}`}
+      className={`overview-tile overview-feature-tile overview-tile-${presentation.tone}`}
     >
       <span className="overview-tile-icon" aria-hidden="true">
         <Icon />
       </span>
       <span className="overview-tile-title">{title}</span>
-      <strong className="overview-tile-status">{status}</strong>
+      <strong className="overview-tile-status">{presentation.label}</strong>
       <div className="overview-feature-actions">
         <label className="overview-switch">
           <span className="wb-sr-only">{title}</span>
@@ -185,7 +176,7 @@ function FeatureTile({
             role="switch"
             aria-label={`${title}开关`}
             checked={feature?.enabled ?? false}
-            disabled={!feature || busy || blocked}
+            disabled={!feature || busy || blocked || failed}
             onChange={(event) => onSwitch(event.target.checked)}
           />
           <span aria-hidden="true" className="overview-switch-track" />
@@ -199,7 +190,7 @@ function FeatureTile({
         </button>
       </div>
       {meta && <span className="overview-tile-meta">{meta}</span>}
-      {feature && (
+      {feature && !failed && (
         <span className="overview-tile-meta">
           期望：{feature.enabled ? "开启" : "关闭"} · 当前：
           {feature.active ? "运行" : "未运行"}
@@ -469,6 +460,7 @@ export function Overview({
                 icon={icon}
                 feature={feature(id)}
                 busy={featureBusy !== undefined}
+                failed={featureRead.error}
                 onSwitch={(enabled) => void switchFeature(id, enabled)}
                 onDetails={() =>
                   navigate(`/developer/modules/${encodeURIComponent(id)}`)
@@ -491,6 +483,7 @@ export function Overview({
             icon={Cable}
             feature={feature("adapter.napcat")}
             busy={featureBusy !== undefined}
+            failed={featureRead.error}
             onSwitch={(enabled) =>
               void switchFeature("adapter.napcat", enabled)
             }

@@ -43,6 +43,21 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsc -b
+      - name: Test development CLI across platforms
+        run: >-
+          pnpm exec vitest run apps/server/src/postgres-cli.test.ts
+          --allowOnly=false --bail=0
+          --reporter=default --reporter=json --outputFile=cli-results.json
+      - name: Require complete CLI test results
+        run: node scripts/check-critical-test-report.mjs cli-results.json
+      - name: Preserve CLI test timings even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.os }}-attempt-${{ github.run_attempt }}
+          path: cli-results.json
+          retention-days: 90
+          if-no-files-found: warn
       - name: Test capture persistence, transport, configuration and lifecycle
         run: >-
           pnpm exec vitest run
