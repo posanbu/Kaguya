@@ -37,6 +37,12 @@
   z-index: 1;
 }
 .wb-sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-right: 1px solid var(--kaguya-line);
   background: color-mix(in srgb, var(--kaguya-paper) 88%, transparent);
   backdrop-filter: blur(12px);
@@ -74,7 +80,7 @@
 }
 .wb-nav a[aria-current="page"] {
   box-shadow: inset 3px 0 var(--kaguya-coral);
-  font-weight: 700;
+  font-weight: 600;
 }
 .wb-body,
 .wb-content {
@@ -156,7 +162,6 @@
 }
 .wb-field-message {
   padding: 10px 12px;
-  border-left: 3px solid currentColor;
   overflow-wrap: anywhere;
 }
 .wb-menu {
@@ -378,8 +383,8 @@
   box-sizing: border-box;
 }
 .wb-page-header h1 {
-  font-size: clamp(24px, 2.4vw, 32px);
-  letter-spacing: -0.03em;
+  font-size: clamp(22px, 2vw, 26px);
+  font-weight: 650;
 }
 .wb-button {
   cursor: pointer;
@@ -422,10 +427,11 @@
   background: color-mix(in srgb, var(--kaguya-coral) 8%, var(--kaguya-paper));
 }
 .wb-field-message {
-  border-radius: 0 8px 8px 0;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 10px;
   font-size: 14px;
   line-height: 1.6;
-  background: var(--kaguya-paper-soft);
+  background: color-mix(in srgb, currentColor 6%, var(--kaguya-paper-soft));
 }
 @media (prefers-reduced-motion: reduce) {
   .wb-button {
