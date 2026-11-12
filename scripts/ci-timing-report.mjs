@@ -6,14 +6,22 @@ const seconds = (start, end) => {
   return Number.isFinite(value) && value >= 0 ? value : null;
 };
 export function summarize(run, jobs) {
-  const executed = jobs.filter(
-    (job) => job.started_at && job.completed_at && job.conclusion !== "skipped",
-  );
-  const end = executed
-    .map((job) => job.completed_at)
-    .sort()
-    .at(-1);
-  const start = executed.map((job) => job.started_at).sort()[0];
+  const executed = jobs.filter((job) => job.conclusion !== "skipped");
+  const complete =
+    jobs.length > 0 &&
+    executed.every((job) => seconds(job.started_at, job.completed_at) !== null);
+  const end =
+    complete && executed.length
+      ? new Date(
+          Math.max(...executed.map((job) => Date.parse(job.completed_at))),
+        ).toISOString()
+      : null;
+  const start =
+    complete && executed.length
+      ? new Date(
+          Math.min(...executed.map((job) => Date.parse(job.started_at))),
+        ).toISOString()
+      : null;
   return {
     id: run.id,
     url: run.html_url,
@@ -26,11 +34,12 @@ export function summarize(run, jobs) {
     elapsedSeconds: end ? seconds(run.created_at, end) : null,
     executionSpanSeconds: end && start ? seconds(start, end) : null,
     initialWaitSeconds: start ? seconds(run.created_at, start) : null,
-    runnerMinutes:
-      executed.reduce(
-        (sum, job) => sum + (seconds(job.started_at, job.completed_at) ?? 0),
-        0,
-      ) / 60,
+    runnerMinutes: complete
+      ? executed.reduce(
+          (sum, job) => sum + (seconds(job.started_at, job.completed_at) ?? 0),
+          0,
+        ) / 60
+      : null,
     jobs: jobs.map((job) => ({
       name: job.name,
       conclusion: job.conclusion,
@@ -53,7 +62,11 @@ export async function collect(request, repo, triggerId) {
     );
     return result.workflow_runs;
   }
+  const workflow = await request(`/repos/${repo}/actions/workflows/test.yml`);
   const trigger = await request(`/repos/${repo}/actions/runs/${triggerId}`);
+  if (trigger.workflow_id !== workflow.id || trigger.status !== "completed") {
+    throw new Error("Target must be a completed Test workflow run");
+  }
   const selected = new Map(
     [
       trigger,
@@ -87,11 +100,12 @@ export function markdown(reports) {
   const over = prs.filter(
     (run) => run.elapsedSeconds !== null && run.elapsedSeconds > 180,
   );
+  const unknown = prs.filter((run) => run.elapsedSeconds === null);
   const daily = reports.filter((run) => run.event === "schedule");
   const lines = [
     "# CI 耗时观测",
     "",
-    `PR 首次尝试非取消样本 ${prs.length} 次，其中创建至完成超过 180 秒 ${over.length} 次。`,
+    `PR 首次尝试非取消样本 ${prs.length} 次，其中创建至完成超过 180 秒 ${over.length} 次，耗时未知 ${unknown.length} 次。`,
     `每日全量样本 ${daily.length} 次，通过 ${daily.filter((run) => run.conclusion === "success").length} 次。`,
     "",
     "创建至首次作业启动包含调度等待；作业跨度包含依赖等待。runner 分钟为作业时长之和，非账单分钟。重跑仅统计最新 attempt，不能据此推定 flaky；重跑的创建至完成还包含人工等待。",
@@ -105,7 +119,13 @@ export function markdown(reports) {
         run.jobs
           .filter((job) => job.seconds > 180)
           .map((job) => job.name.replaceAll("|", "\\|"))
-          .join(", ") || "无"
+          .join(", ") ||
+        (run.jobs.length === 0 ||
+        run.jobs.some(
+          (job) => job.conclusion !== "skipped" && job.seconds === null,
+        )
+          ? "部分作业耗时未知"
+          : "无")
       } |`,
     );
   lines.push("", "## 作业与步骤", "");

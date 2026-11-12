@@ -19,13 +19,21 @@
   border-bottom: 1px solid var(--kaguya-line);
 }
 .developer-tabs a {
-  padding: 14px 10px;
+  padding: 12px 10px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
   color: var(--kaguya-muted);
+  font-weight: 500;
   text-decoration: none;
+  transition: color 120ms ease;
+}
+.developer-tabs a:hover {
+  color: var(--kaguya-ink);
 }
 .developer-tabs a[aria-current="page"] {
   color: var(--kaguya-coral-strong);
-  border-bottom: 3px solid var(--kaguya-coral);
+  border-bottom-color: var(--kaguya-coral);
+  font-weight: 600;
 }
 .developer-search,
 .developer-filters label {
@@ -35,12 +43,18 @@
 .developer-main input,
 .developer-main select {
   padding: 10px;
-  border: 1px solid var(--kaguya-line);
-  border-radius: 8px;
-  background: var(--kaguya-paper);
+  border: 1px solid var(--kaguya-input-line);
+  border-radius: 9px;
+  background: var(--kaguya-input);
   color: var(--kaguya-ink);
   min-width: 0;
   width: 100%;
+}
+.developer-main input:focus,
+.developer-main select:focus {
+  border-color: var(--kaguya-input-focus);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--kaguya-focus-halo);
 }
 .developer-search {
   max-width: 800px;
@@ -65,6 +79,7 @@
   border-radius: 12px;
   padding: 22px;
   background: var(--kaguya-paper);
+  box-shadow: var(--kaguya-shadow-sm);
   min-width: 0;
   overflow-wrap: anywhere;
 }
