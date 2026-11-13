@@ -33,16 +33,21 @@ export async function persistedSourceProofOwners(
     memory_scope: string | null;
     receipt: any;
     intent: any;
+    internal_source: any;
+    internal_origin: string | null;
+    memory_text: string | null;
   }>(
     `SELECT a.payload->'memorySource'->>'id' id,a.payload->'memorySource'->>'ownerId' owner,
-      a.information_id storage_id,true canonical,a.payload->'sourceOwners' owners,a.payload->'sourceProofVersion' version,a.payload->'memorySource'->>'sourceType' source_type,a.payload->'receiptProof' receipt_proof,a.payload->'memorySource'->>'scope' memory_scope,receipt.payload receipt,h.input intent
+      a.information_id storage_id,true canonical,a.payload->'sourceOwners' owners,a.payload->'sourceProofVersion' version,a.payload->'memorySource'->>'sourceType' source_type,a.payload->'receiptProof' receipt_proof,a.payload->'memorySource'->>'scope' memory_scope,receipt.payload receipt,h.input intent,
+      original.payload internal_source,original.source internal_origin,a.payload->'memorySource'->>'text' memory_text
       FROM information_atoms a JOIN information_lifecycle l USING(information_id)
       LEFT JOIN information_action_receipts ar ON ar.receipt_id=a.payload->'memorySource'->>'id'
       LEFT JOIN information_atoms receipt ON receipt.information_id=ar.receipt_id LEFT JOIN information_action_heads h ON h.intent_id=ar.intent_id
+      LEFT JOIN information_atoms original ON original.information_id=a.payload->'memorySource'->>'id' AND original.kind='agent.continuity.internal-source.v1'
       WHERE a.information_id=ANY($1::text[]) AND a.kind='memory.native.source.v1'
         AND jsonb_typeof(a.payload->'memorySource'->'id')='string' AND jsonb_typeof(a.payload->'memorySource'->'ownerId')='string'
         AND ($3::bigint IS NULL OR l.position<=$3::bigint)
-    UNION ALL SELECT source->>'id',source->>'ownerId',id,false,NULL::jsonb,NULL::jsonb,source->>'sourceType',NULL::jsonb,source->>'scope',NULL::jsonb,NULL::jsonb FROM memory_native_sources
+    UNION ALL SELECT source->>'id',source->>'ownerId',id,false,NULL::jsonb,NULL::jsonb,source->>'sourceType',NULL::jsonb,source->>'scope',NULL::jsonb,NULL::jsonb,NULL::jsonb,NULL::text,NULL::text FROM memory_native_sources
       WHERE id=ANY($2::text[]) AND $3::bigint IS NULL AND NOT $4::boolean
         AND jsonb_typeof(source->'id')='string' AND jsonb_typeof(source->'ownerId')='string'`,
     [
@@ -83,6 +88,26 @@ export async function persistedSourceProofOwners(
       )
         continue;
     }
+    if (
+      row.source_type === "internal" &&
+      (!row.canonical ||
+        row.internal_origin !== "runtime:continuity" ||
+        row.owner !== "self:kaguya" ||
+        row.internal_source?.ownerId !== "self:kaguya" ||
+        row.memory_scope !== row.internal_source?.scope ||
+        row.memory_text !== row.internal_source?.text)
+    )
+      continue;
+    if (
+      row.source_type === "internal" &&
+      Array.isArray(row.owners) &&
+      row.owners.some(
+        (o: unknown) =>
+          o !== "self:kaguya" &&
+          !row.internal_source?.relatedPersonIds?.includes(o),
+      )
+    )
+      continue;
     const complete =
       row.version === 1 &&
       Array.isArray(row.owners) &&

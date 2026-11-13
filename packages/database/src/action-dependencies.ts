@@ -173,12 +173,32 @@ export async function checkActionDependencies(
       continue;
     }
     const row = (
-      await tx.query<{ payload: any; kind: string }>(
-        `SELECT a.payload,a.kind FROM information_atoms a JOIN information_lifecycle l USING(information_id)
+      await tx.query<{ payload: any; kind: string; source: string }>(
+        `SELECT a.payload,a.kind,a.source FROM information_atoms a JOIN information_lifecycle l USING(information_id)
        WHERE a.information_id=$1 AND l.position<=(SELECT position FROM information_lifecycle WHERE information_id=$2)`,
         [id, proof.boundaries.get(id)],
       )
     ).rows[0];
+    if (
+      manifest.proofKind === "continuity" &&
+      id === manifest.frozenInformationId &&
+      row?.kind === "agent.continuity.execution.frozen.v1"
+    ) {
+      if (
+        row.source !== "runtime:continuity" ||
+        memoryScope(row.payload.source) !== scope ||
+        actionDigest(row.payload) !== actionDigest(manifest.content)
+      )
+        reject(id, "continuity-source-unproved");
+      sources.add(id);
+      const activity = row.payload.view?.activities?.find(
+        (a: any) => a.id === row.payload.activityId,
+      );
+      for (const dependency of activity?.sources ?? []) sources.add(dependency);
+      const sourceOwners = await sourceProofOwners(tx, activity?.sources ?? []);
+      for (const owner of sourceOwners.keys()) owners.add(owner);
+      continue;
+    }
     if (proof.receipts.has(id)) {
       const receipt = (
         await tx.query<{ input: any }>(

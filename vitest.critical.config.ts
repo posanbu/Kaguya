@@ -17,6 +17,7 @@ import baseConfig from "./vitest.config";
 // PR 必须执行这些文件中的全部用例。通过分片控制耗时，不按用例名称过滤。
 // 新增关键行为时维护此清单。每日全量测试仍使用基础配置收集全部测试。
 const criticalTests = [
+  "packages/database/src/continuity-store.test.ts",
   "packages/config/src/model.test.ts",
   "packages/config/src/manager.test.ts",
   "packages/config/src/module-config.test.ts",
