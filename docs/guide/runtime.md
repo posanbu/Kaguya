@@ -88,6 +88,8 @@ pnpm postgres:check
 
 **`rateLimitWindowMs`** — 窗口长度，默认 `60000`（60 秒），范围 `1000–3600000`。超过限制会返回 `429`。
 
+以上参数控制普通读取、写入和未认证请求的额度，按客户端 IP 区分已认证与未认证流量。已认证的检查页、配置应用状态、适配器状态和消息增量读取各有每 60 秒 120 次的独立额度，正常后台轮询不会占用管理操作额度。收到 `429` 时按 `Retry-After` 等待；详细分组见 [HTTP API](../reference/http-api#bearer-认证)。
+
 **`inboundAllowlist` / `outboundAllowlist`** — 非 Web 平台的双向消息规则，默认都是空数组。可以在网页编辑，格式见[QQ 白名单](./napcat#允许哪些群和私聊)。
 
 ## 远程访问
