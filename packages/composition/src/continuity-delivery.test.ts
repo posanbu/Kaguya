@@ -34,6 +34,12 @@ describe.each(backends)(
   "autonomous commitment delivery $name",
   ({ create }) => {
     it("reads and verifies the note, sends once to the requester, and leaves fulfillment pending until feedback", async () => {
+      // 整例仍限 40 秒，各阶段共用剩余时间，并为关闭预留 1 秒。
+      const deadline = performance.now() + 39_000;
+      const waitForCheckpoint = (check: () => void | Promise<void>) =>
+        vi.waitFor(check, {
+          timeout: Math.max(1, deadline - performance.now()),
+        });
       const db = await create(),
         dir = await mkdtemp(join(tmpdir(), "kaguya-commitment-")),
         conversationId = randomUUID();
@@ -59,7 +65,6 @@ describe.each(backends)(
             limit: 1,
           })
         )[0]!;
-        const a = (await db.continuity.read("kaguya", scope))?.activities[0];
         const task = request.payload.taskId;
         if (task === "agent.continuity.appraise")
           return {
@@ -69,7 +74,8 @@ describe.each(backends)(
               feedback: [],
             }),
           };
-        if (task === "agent.continuity.choose")
+        if (task === "agent.continuity.choose") {
+          const a = (await db.continuity.read("kaguya", scope))?.activities[0];
           return {
             text: JSON.stringify({
               action: a && a.fulfillment !== "fulfilled" ? "continue" : "wait",
@@ -81,11 +87,13 @@ describe.each(backends)(
               checkAfterMs: 3600000,
             }),
           };
+        }
         if (task === "agent.light.decide")
           return {
             text: JSON.stringify({ action: "message", reason: "respond" }),
           };
         if (task === "agent.heavy.respond") {
+          const a = (await db.continuity.read("kaguya", scope))?.activities[0];
           const inbound = (
             await db.information.find({
               kinds: ["core.message.inbound.text"],
@@ -153,7 +161,8 @@ describe.each(backends)(
             }),
           };
         }
-        if (step === 5)
+        if (step === 5) {
+          const a = (await db.continuity.read("kaguya", scope))?.activities[0];
           return {
             calls: [
               {
@@ -167,6 +176,7 @@ describe.each(backends)(
               },
             ],
           };
+        }
         return {
           text: JSON.stringify({
             status: "complete",
@@ -178,6 +188,7 @@ describe.each(backends)(
           }),
         };
       });
+      // 此例验证事件驱动的活动与履约，不让独立周期检查竞争同一条链。
       const configs = createFirstPartyModuleConfigDefaults("test").map((c) => ({
         ...c,
         enabled:
@@ -187,7 +198,9 @@ describe.each(backends)(
         settings:
           c.definitionId === "agent.continuity"
             ? { autonomous: true, scope }
-            : c.settings,
+            : c.definitionId === "agent.lifecycle"
+              ? { ...c.settings, pulse: { intervalMs: 60_000 } }
+              : c.settings,
       }));
       const runtime = new KaguyaRuntime({
         database: db,
@@ -311,37 +324,32 @@ describe.each(backends)(
         });
       try {
         await runtime.start();
-        await vi.waitFor(
-          async () =>
-            expect(
-              await db.information.find({
-                kinds: ["agent.continuity.cycle.v1"],
-                limit: 10,
-              }),
-            ).toHaveLength(1),
-          { timeout: 8000 },
+        await waitForCheckpoint(async () =>
+          expect(
+            await db.information.find({
+              kinds: ["agent.continuity.cycle.v1"],
+              limit: 10,
+            }),
+          ).toHaveLength(1),
         );
         await send("请读一下月球资料，稍后把笔记分享给我");
         // 活动在接受回复投递后启动。等周期提交后再读取版本，避免与检查时间更新竞争。
         let acceptanceDeliveryId = "";
         try {
-          await vi.waitFor(
-            async () => {
-              const delivery = (
-                await db.information.find({
-                  kinds: ["core.delivery.delivered"],
-                  payloadContains: {
-                    adapterId: "web.test",
-                    target: { kind: "web", conversationId },
-                  },
-                  limit: 1,
-                })
-              )[0];
-              expect(delivery, errors.join("\n")).toBeDefined();
-              acceptanceDeliveryId = delivery!.informationId;
-            },
-            { timeout: 10000 },
-          );
+          await waitForCheckpoint(async () => {
+            const delivery = (
+              await db.information.find({
+                kinds: ["core.delivery.delivered"],
+                payloadContains: {
+                  adapterId: "web.test",
+                  target: { kind: "web", conversationId },
+                },
+                limit: 1,
+              })
+            )[0];
+            expect(delivery, errors.join("\n")).toBeDefined();
+            acceptanceDeliveryId = delivery!.informationId;
+          });
         } catch (error) {
           const facts = await db.information.find({
             occurredAfter: "2020-01-01T00:00:00Z",
@@ -376,20 +384,17 @@ describe.each(backends)(
             { cause: error },
           );
         }
-        await vi.waitFor(
-          async () => {
-            const cycle = (
-              await db.information.find({
-                kinds: ["agent.continuity.cycle.v1"],
-                payloadContains: { sourceId: acceptanceDeliveryId },
-                limit: 1,
-              })
-            )[0];
-            expect(cycle, errors.join("\n")).toBeDefined();
-            expect(cycle!.payload).toMatchObject({ status: "completed" });
-          },
-          { timeout: 10000 },
-        );
+        await waitForCheckpoint(async () => {
+          const cycle = (
+            await db.information.find({
+              kinds: ["agent.continuity.cycle.v1"],
+              payloadContains: { sourceId: acceptanceDeliveryId },
+              limit: 1,
+            })
+          )[0];
+          expect(cycle, errors.join("\n")).toBeDefined();
+          expect(cycle!.payload).toMatchObject({ status: "completed" });
+        });
         let a = (await db.continuity.read("kaguya", scope))!.activities[0]!;
         expect(a).toMatchObject({
           state: "waiting",
@@ -407,11 +412,10 @@ describe.each(backends)(
           change: { state: "active", reason: "从保存的分享步骤继续" },
           basis: [a.acceptedBy!],
         });
-        await vi.waitFor(
-          () => expect(sent, errors.join("\n")).toHaveLength(2),
-          { timeout: 10000 },
+        await waitForCheckpoint(() =>
+          expect(sent, errors.join("\n")).toHaveLength(2),
         );
-        await vi.waitFor(async () =>
+        await waitForCheckpoint(async () =>
           expect(
             (await db.continuity.read("kaguya", scope))?.activities[0]
               ?.deliveryIds,
@@ -421,14 +425,12 @@ describe.each(backends)(
         expect(a.fulfillment).toBe("pending");
         expect(sent[1]).toContain("约好的阅读笔记");
         await send("这份笔记就是约好的内容，已收到并确认");
-        await vi.waitFor(
-          async () =>
-            expect(
-              (await db.continuity.read("kaguya", scope))?.activities[0]
-                ?.fulfillment,
-              errors.join("\n"),
-            ).toBe("fulfilled"),
-          { timeout: 10000 },
+        await waitForCheckpoint(async () =>
+          expect(
+            (await db.continuity.read("kaguya", scope))?.activities[0]
+              ?.fulfillment,
+            errors.join("\n"),
+          ).toBe("fulfilled"),
         );
         expect(
           (await db.continuity.read("kaguya", "private:other"))?.activities,

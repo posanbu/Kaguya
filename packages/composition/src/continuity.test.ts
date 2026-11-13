@@ -35,6 +35,12 @@ describe.each(backends)(
   "continuous production composition $name",
   ({ create }) => {
     it("records acceptance before replying, links actual delivery and requires feedback from the original requester", async () => {
+      // 共用原 15 秒整例上限，为关闭预留 1 秒，避免阶段上限先于整例到期。
+      const deadline = performance.now() + 14_000;
+      const waitForCheckpoint = (check: () => void | Promise<void>) =>
+        vi.waitFor(check, {
+          timeout: Math.max(1, deadline - performance.now()),
+        });
       const db = await create();
       const conversationId = randomUUID();
       const scope = JSON.stringify(["web", "web.test", "web", conversationId]);
@@ -85,6 +91,7 @@ describe.each(backends)(
         action: "message",
         reason: "respond",
       });
+      // 此例验证消息与履约，周期检查由 Lifecycle 的专门测试覆盖。
       const moduleConfigs = createFirstPartyModuleConfigDefaults("test").map(
         (c) => ({
           ...c,
@@ -95,7 +102,9 @@ describe.each(backends)(
           settings:
             c.definitionId === "agent.continuity"
               ? { autonomous: false }
-              : c.settings,
+              : c.definitionId === "agent.lifecycle"
+                ? { ...c.settings, pulse: { intervalMs: 60_000 } }
+                : c.settings,
         }),
       );
       const runtime = new KaguyaRuntime({
@@ -136,7 +145,7 @@ describe.each(backends)(
           raw: {},
         });
         try {
-          await vi.waitFor(() => expect(sent).toBe(count), { timeout: 8000 });
+          await waitForCheckpoint(() => expect(sent).toBe(count));
         } catch {
           const facts = await db.information.find({
             occurredAfter: "2020-01-01T00:00:00Z",
@@ -171,24 +180,20 @@ describe.each(backends)(
         expect(a.acceptedBy).toBeTruthy();
         expect(a.acceptedFrom).toBeTruthy();
         await send("现在可以发给我了", 2);
-        await vi.waitFor(
-          async () =>
-            expect(
-              (await db.continuity.read("kaguya", scope))?.activities[0]
-                ?.deliveryIds,
-            ).toHaveLength(1),
-          { timeout: 8000 },
+        await waitForCheckpoint(async () =>
+          expect(
+            (await db.continuity.read("kaguya", scope))?.activities[0]
+              ?.deliveryIds,
+          ).toHaveLength(1),
         );
         a = (await db.continuity.read("kaguya", scope))!.activities[0]!;
         expect(a.fulfillment).toBe("pending");
         await send("这份笔记就是约好的内容，已收到并确认", 3);
-        await vi.waitFor(
-          async () =>
-            expect(
-              (await db.continuity.read("kaguya", scope))?.activities[0]
-                ?.fulfillment,
-            ).toBe("fulfilled"),
-          { timeout: 8000 },
+        await waitForCheckpoint(async () =>
+          expect(
+            (await db.continuity.read("kaguya", scope))?.activities[0]
+              ?.fulfillment,
+          ).toBe("fulfilled"),
         );
         expect((await db.continuity.read("kaguya", scope))?.budget.used).toBe(
           0,
