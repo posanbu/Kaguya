@@ -51,8 +51,12 @@ vi.mock("@ai-sdk/openai-compatible", async () => {
     await import("@kaguya/llm/testing");
   return {
     createOpenAICompatible: vi.fn(() => ({
-      chatModel: () =>
-        createRepeatingDeterministicModel({ text: "reload test reply" }),
+      chatModel: (modelId: string) =>
+        createRepeatingDeterministicModel(
+          modelId === "test-light"
+            ? { action: "message", reason: "respond" }
+            : { action: "message", text: "reload test reply" },
+        ),
     })),
   };
 });
@@ -60,7 +64,11 @@ vi.mock("@ai-sdk/openai-compatible", async () => {
 vi.setConfig({ testTimeout: 45_000 });
 
 const cleanup: (() => Promise<unknown>)[] = [];
-afterEach(async () => {
+let reloadPhases: { phase: string; elapsedMs: number }[] | undefined;
+afterEach(async (context) => {
+  if (context.task.result?.state === "fail" && reloadPhases)
+    console.info({ test: context.task.name, phases: reloadPhases });
+  reloadPhases = undefined;
   for (const action of cleanup.splice(0).reverse()) await action();
   vi.restoreAllMocks();
 });
@@ -91,8 +99,8 @@ async function fixture(incomplete = false) {
     ai: {
       defaultProviderId: "p",
       modelTiers: {
-        light: { providerId: "p", modelId: "test" },
-        heavy: { providerId: "p", modelId: "test" },
+        light: { providerId: "p", modelId: "test-light" },
+        heavy: { providerId: "p", modelId: "test-heavy" },
       },
       providers: [
         {
@@ -101,7 +109,7 @@ async function fixture(incomplete = false) {
           enabled: true,
           apiKey: "original-private-key",
           baseUrl: "https://example.com/v1",
-          models: ["test"],
+          models: ["test-light", "test-heavy"],
           settings: {},
         },
       ],
@@ -192,14 +200,25 @@ async function save(server: StartedKaguyaServer) {
   return response.json().data;
 }
 it("replaces downstream instances while retaining HTTP, authentication, database and live inspection", async () => {
+  const started = performance.now();
+  const phases: { phase: string; elapsedMs: number }[] = [];
+  reloadPhases = phases;
+  const mark = (phase: string) =>
+    phases.push({
+      phase,
+      elapsedMs: Math.round(performance.now() - started),
+    });
   const f = await fixture();
+  mark("fixture");
   const oldRuntime = f.server.runtime!;
   const oldHost = f.server.adapterHost;
   const address = f.server.app.server.address();
   const dbClose = vi.spyOn(f.databases[0]!, "close");
   const saved = await save(f.server);
+  mark("save");
   expect(saved.application.state).toBe("pending");
   const response = await apply(f.server, saved.application);
+  mark("apply");
   expect(response.statusCode).toBe(200);
   expect(response.json().data).toMatchObject({
     status: "applied",
@@ -239,11 +258,30 @@ it("replaces downstream instances while retaining HTTP, authentication, database
       ).toHaveLength(1),
     { timeout: 8000, interval: 20 },
   );
+  mark("inbound");
+  await vi.waitFor(
+    async () =>
+      expect(
+        await f.databases[0]!.information.find({
+          kinds: ["core.delivery.delivered"],
+          limit: 1,
+        }),
+      ).toHaveLength(1),
+    { timeout: 8000 },
+  );
+  expect(
+    await f.databases[0]!.information.find({
+      kinds: ["core.model.task.failed"],
+      limit: 1,
+    }),
+  ).toEqual([]);
+  mark("reply-delivered");
   const current = f.server.runtime;
   expect(
     (await apply(f.server, await status(f.server))).json().data.status,
   ).toBe("applied");
   expect(f.server.runtime).toBe(current);
+  mark("idempotent-apply");
   const list = (
     await f.server.app.inject({ url: "/api/v1/profiles", headers })
   ).json().data;
