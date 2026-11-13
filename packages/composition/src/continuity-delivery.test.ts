@@ -21,7 +21,13 @@ if (process.env.KAGUYA_REQUIRE_POSTGRES_TESTS === "1" && !pg)
 const backends = [
   { name: "PGlite", create: createTestingDatabase },
   ...(pg
-    ? [{ name: "PostgreSQL", create: () => createPostgresTestingDatabase(pg) }]
+    ? Array.from(
+        { length: Number(process.env.KAGUYA_CI_REPRO_ATTEMPTS ?? 1) },
+        (_, index) => ({
+          name: `PostgreSQL ${index + 1}`,
+          create: () => createPostgresTestingDatabase(pg),
+        }),
+      )
     : []),
 ];
 describe.each(backends)(
@@ -338,6 +344,7 @@ describe.each(backends)(
           );
         } catch (error) {
           const facts = await db.information.find({
+            occurredAfter: "2020-01-01T00:00:00Z",
             registrationOrder: true,
             order: "asc",
             limit: 1000,
@@ -348,11 +355,22 @@ describe.each(backends)(
               errors,
               facts: facts.map((a) => ({
                 kind: a.kind,
+                occurredAt: a.occurredAt,
                 task: a.payload.taskId,
                 status: a.payload.status,
                 reason: a.payload.reason,
+                error:
+                  typeof a.payload.error === "string"
+                    ? a.payload.error
+                    : undefined,
                 stage: (a.payload.error as { stage?: string } | undefined)
                   ?.stage,
+                outcome: (a.payload.outcome as { status?: string } | undefined)
+                  ?.status,
+                resultReason: (
+                  a.payload.outcome as
+                    { result?: { reason?: string } } | undefined
+                )?.result?.reason,
               })),
             }),
             { cause: error },
