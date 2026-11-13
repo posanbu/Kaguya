@@ -44,8 +44,7 @@ describe.each(backends)(
         step = 0;
       const sent: string[] = [];
       await writeFile(join(dir, "source.txt"), "月球表面有环形山。", "utf8");
-      const modelCalls: { task: unknown; prompt: string }[] = [];
-      const model = createNativeScriptedModel(async (call) => {
+      const model = createNativeScriptedModel(async () => {
         const request = (
           await db.information.find({
             kinds: ["core.model.task.requested"],
@@ -56,21 +55,6 @@ describe.each(backends)(
         )[0]!;
         const a = (await db.continuity.read("kaguya", scope))?.activities[0];
         const task = request.payload.taskId;
-        const text = call.prompt
-          .flatMap((m) =>
-            typeof m.content === "string"
-              ? [m.content]
-              : m.content.flatMap((p) => (p.type === "text" ? [p.text] : [])),
-          )
-          .join("\n");
-        modelCalls.push({
-          task,
-          prompt:
-            text.match(/当前步骤：(评价|选择|执行)。/)?.[1] ??
-            (text.replace(/\s/g, "").startsWith("你是Agent的规划器")
-              ? "light"
-              : "reply"),
-        });
         if (task === "agent.continuity.appraise")
           return {
             text: JSON.stringify({
@@ -360,7 +344,6 @@ describe.each(backends)(
           });
           throw new Error(
             JSON.stringify({
-              modelCalls,
               sent: sent.length,
               errors,
               facts: facts.map((a) => ({

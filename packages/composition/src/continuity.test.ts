@@ -34,7 +34,6 @@ const backends = [
 describe.each(backends)(
   "continuous production composition $name",
   ({ create }) => {
-    // 三次回复与两次存储确认各允许等待 8 秒，另为启动和关闭预留 5 秒。
     it("records acceptance before replying, links actual delivery and requires feedback from the original requester", async () => {
       const db = await create();
       const conversationId = randomUUID();
@@ -205,7 +204,7 @@ describe.each(backends)(
         await db.close();
         failureSpy.mockRestore();
       }
-    }, 45_000);
+    });
     it.each([true, false])(
       "requires actual source, saved note and read-back proof (source reported: %s)",
       async (hasSource) => {
