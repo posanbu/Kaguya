@@ -44,7 +44,7 @@ import {
   nativeMemoryObservationCompleted,
   formationSchemaFor,
 } from "./facts.js";
-import { createPromptTemplateRenderer } from "../../prompt-template.js";
+import { createFormationPromptRenderer } from "./formation-prompt.js";
 import { nativeMemoryTemplateDeclaration } from "../../prompt-declarations.js";
 import type { CreateRouterModuleOptions } from "../router/index.js";
 import { deliveryRequestedInformationKind } from "../kinds/message.js";
@@ -56,14 +56,7 @@ export function createNativeMemoryModule(
     deliveryDeliveredInformationKind?: CreateRouterModuleOptions["deliveryDeliveredInformationKind"];
   },
 ) {
-  const render = createPromptTemplateRenderer({
-    kind: "memory",
-    templateId: "memory.native.form.v1",
-    main: {
-      ...nativeMemoryTemplateDeclaration,
-      content: options.nativeMemoryTemplate,
-    },
-  });
+  const render = createFormationPromptRenderer(options.nativeMemoryTemplate);
   async function request(
     batch: MemoryBatch,
     context: InformationModuleHandlerContext,
@@ -482,26 +475,9 @@ export function createNativeMemoryModule(
                     activation,
                     selectionPolicy: { tier: "light" },
                     contextAtoms: [atom, ...sources],
-                    prompt: render([
-                      {
-                        name: "context",
-                        content: JSON.stringify({
-                          ...p,
-                          ...(p.formationPolicy
-                            ? {
-                                formationRules: {
-                                  policy: p.formationPolicy,
-                                  instructions:
-                                    "批次仅为读取窗口。延续同一经历时使用已有节点ID作为key。证据不足时保持不变，不把旁观者内容归给被提问者。封口、重开、更正用experienceOperation且inputIds和outputIds为同一已有ID。合并/拆分用旧ID作为inputIds、新key作为outputIds，nodes同时包含归档输入及active输出。输出明确分配原输入全部来源，不编造归属。每批至多一次经历操作；其他节点可普通增补。空结果或完全无变化确认本批读取。",
-                                },
-                              }
-                            : {}),
-                        }),
-                        informationIds: [
-                          atom.informationId,
-                          ...sources.map((s) => s.informationId),
-                        ],
-                      },
+                    prompt: render(p, [
+                      atom.informationId,
+                      ...sources.map((s) => s.informationId),
                     ]),
                   });
               const { status, reason, nodeIds } = saved

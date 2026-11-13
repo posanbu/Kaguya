@@ -47,6 +47,8 @@ const criticalTests = [
   "packages/modules/src/first-party/heavy/message-context.test.ts",
   "packages/modules/src/first-party/heavy/frozen-context-persistence.test.ts",
   "packages/modules/src/first-party/memory-native/formation.test.ts",
+  "packages/modules/src/first-party/memory-native/formation-prompt.test.ts",
+  "promptfoo/portrait-behavior-provider.test.ts",
   "packages/modules/src/first-party/memory-native/prompt.test.ts",
   "packages/runtime/src/observation-runtime.test.ts",
   "packages/runtime/src/runtime.test.ts",

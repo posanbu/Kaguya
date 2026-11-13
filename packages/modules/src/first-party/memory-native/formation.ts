@@ -12,7 +12,7 @@ import {
   formationSchemaFor,
   nativeMemoryRequested,
 } from "./facts.js";
-type FormationInput = Omit<
+export type FormationInput = Omit<
   z.infer<typeof nativeMemoryRequested.payloadSchema>,
   "existing"
 > & { existing: NativeMemorySnapshot };
