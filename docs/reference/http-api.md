@@ -223,3 +223,15 @@ HTTP 日志不记录 Authorization、body、query 或消息正文。生产部署
 **恢复默认** — 同一路径的 `DELETE` 接受 `{ revision }`，先验证恢复后的整组，再删除对应覆盖。模板组版本过期返回 `409 templates_changed`。校验错误为 `400`，代码包括 `empty_template`、`unknown_variable`、`invalid_partial`、`unsupported_helper`、`invalid_syntax` 和 `recursive_partial`，不回传解析器源码片段。
 
 并发替换与配置应用共享当前 Server 进程的串行锁，锁内重读并比较 HMAC revision。文件替换使用临时文件与原子 rename，并拒绝管理路径上的符号链接。该锁不协调其他进程绕过管理接口直接修改文件。管理接口不可用或文件不安全时返回安全的 `503`；未知模块、实例或模板返回 `404`。
+
+## 持续状态、活动与人物关系
+
+以下接口使用 `management` Bearer 认证，响应设置 `Cache-Control: no-store`。它们保留旧 Profile 的关闭默认，不触发模型，也不更改工具权限。
+
+**活动检视 —** `GET /api/v1/continuity?scope=...` 返回 `{ view, scope, scopes }`。未建立持续状态时 `view` 为 `null`。`view` 包含策略、状态有效性、预算、当前范围及共同可见活动、资源和最近回执元数据。全局忙碌可以可见，其他私人范围的活动 ID 与正文不会进入此视图。记录超过上限时返回截断标记。
+
+**人物检视 —** `GET /api/v1/continuity/people/:personId?scope=...` 使用原人物 ID，返回当前范围可读的认识、相关共同经历和活动。返回值包含节点版本、来源 ID、查询时间和截断标记。人物重名不改变 ID，关系页不将识别次数解释为亲密程度。
+
+**活动管理 —** `POST /api/v1/continuity/activities/:activityId/control` 接受 `{ scope, operationId, expectedRevision, action }`。`operationId` 为 UUID，`action` 为 `pause`、`resume` 或 `abandon`。返回 `{ activity }`。重复原操作返回原结果。版本竞争、操作身份冲突、主活动位置占用、预算不足、未完成重评或停用状态返回 409。输入不合法返回 400，范围内没有目标活动返回 404，数据库不可用返回 503。
+
+暂停和放弃可能先保存安全边界请求。它们不证明外部进程已停止，也不改写未知结果。恢复仍受当前预算、授权和来源有效性约束。操作结果未知时先刷新核对，再重试原操作。启停与回退说明见[自我、状态、活动与关系](../developers/continuous/self-activity)。
