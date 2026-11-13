@@ -316,18 +316,45 @@ describe.each(backends)(
           { timeout: 8000 },
         );
         await send("请读一下月球资料，稍后把笔记分享给我");
+        // 活动在接受回复投递后启动。等周期提交后再读取版本，避免与检查时间更新竞争。
+        let acceptanceDeliveryId = "";
         await vi.waitFor(
           async () => {
-            const a = (await db.continuity.read("kaguya", scope))
-              ?.activities[0];
-            expect(a, errors.join("\n")).toMatchObject({
-              state: "waiting",
-              externalResult: "verified",
-            });
+            const delivery = (
+              await db.information.find({
+                kinds: ["core.delivery.delivered"],
+                payloadContains: {
+                  adapterId: "web.test",
+                  target: { kind: "web", conversationId },
+                },
+                limit: 1,
+              })
+            )[0];
+            expect(delivery, errors.join("\n")).toBeDefined();
+            acceptanceDeliveryId = delivery!.informationId;
+          },
+          { timeout: 10000 },
+        );
+        await vi.waitFor(
+          async () => {
+            const cycle = (
+              await db.information.find({
+                kinds: ["agent.continuity.cycle.v1"],
+                payloadContains: { sourceId: acceptanceDeliveryId },
+                limit: 1,
+              })
+            )[0];
+            expect(cycle, errors.join("\n")).toBeDefined();
+            expect(cycle!.payload).toMatchObject({ status: "completed" });
           },
           { timeout: 10000 },
         );
         let a = (await db.continuity.read("kaguya", scope))!.activities[0]!;
+        expect(a).toMatchObject({
+          state: "waiting",
+          externalResult: "verified",
+        });
+        expect(a.nextCheckAt).not.toBeNull();
         expect(sent).toHaveLength(1);
         expect(a.deliveryIds).toEqual([]);
         expect(a.fulfillment).toBe("pending");
