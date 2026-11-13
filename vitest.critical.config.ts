@@ -125,6 +125,9 @@ if (process.env.CI && !process.env.KAGUYA_TEST_DATABASE_URL?.trim()) {
 
 export default mergeConfig(baseConfig, {
   test: {
+    // 完整 Runtime/PGlite 文件各自占用较多资源，分片内串行，四个 CI 分片仍并行。
+    // 用例内部的真实数据库连接、模型和行动竞争保持并发。
+    maxWorkers: 1,
     include: criticalTests,
     passWithNoTests: false,
     allowOnly: false,

@@ -147,7 +147,7 @@ export async function runPostgresCli(
       fileURLToPath(
         new URL("./vitest.mjs", import.meta.resolve("vitest/package.json")),
       ),
-      ["run", ...POSTGRES_TEST_FILES],
+      ["run", "--maxWorkers=1", ...POSTGRES_TEST_FILES],
       repositoryRoot,
       {
         ...process.env,

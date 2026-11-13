@@ -277,9 +277,10 @@ it("replaces downstream instances while retaining HTTP, authentication, database
   ).toEqual([]);
   mark("reply-delivered");
   const current = f.server.runtime;
-  expect(
-    (await apply(f.server, await status(f.server))).json().data.status,
-  ).toBe("applied");
+  // 重投同一版本的应用命令，不重新读取一份可能不同的配置版本。
+  expect((await apply(f.server, saved.application)).json().data.status).toBe(
+    "applied",
+  );
   expect(f.server.runtime).toBe(current);
   mark("idempotent-apply");
   const list = (
