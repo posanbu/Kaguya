@@ -21,6 +21,7 @@ const criticalTests = [
   "packages/composition/src/continuity.test.ts",
   "packages/composition/src/continuity-delivery.test.ts",
   "packages/modules/src/first-party/continuity/index.test.ts",
+  "apps/server/src/continuity-routes.test.ts",
   "packages/config/src/model.test.ts",
   "packages/config/src/manager.test.ts",
   "packages/config/src/module-config.test.ts",

@@ -163,3 +163,13 @@ LLM 客户端接受文本 `prompt` 或结构化 `messages`，两者互斥。Heav
 原生模型历史保留回复时间、目标来源和已冻结的会话背景。当前目录可为相关来源补充已核实的群名及核实时间，缺失名称保持未知。历史回复是过去的输出，不是当前活动证据。回答“在干嘛”应依据当前活动。普通跨群话题不自动构成保密信息，受到质疑时应核对来源并撤回无依据的说法。
 
 旧 `agent.attention.arousal.*` 和 `agent.heartbeat.*` 事实及 Router 契约继续保留。新活动事实使用 `agent.lifecycle.*`。模块迁移复用旧持久订阅身份，接受旧实例的存量调度，新调度归属 `lifecycle.default`。
+
+## 持续自我、状态与活动
+
+`agent.continuity.default.hbs` 使用 `phase` 与 `context` 两个变量。评价、选择和执行分别使用生产 light、light、heavy Model Task。`context` 引用已冻结的自我、状态、开放活动、资源及宿主工具配置。评价完成并保存后，选择重新冻结输入。生命周期节拍不调用此模板。
+
+启用模块时，Router 为新请求增加 `continuity_snapshot` 的来源元数据。其正文在共享全局情境中只注入一次，Light 与 Heavy 使用同一冻结事实。Heavy 的新增 `continuity` 决策区分无约定、接受、延后、投递和反馈。旧请求没有该变量时沿用原输出 schema。角色种子进入 native Memory 后，Heavy 从该权威版本读取，不再另行注入可独立演化的人设正文。
+
+模板约束、启停与来源范围见[自我、状态、活动与关系](./continuous/self-activity)。
+
+<<< ../../packages/modules/templates/agent.continuity.default.hbs

@@ -10,6 +10,7 @@ import { inspectionPageSchema, type InspectionModule } from "@kaguya/schema";
 import { useInspection } from "./use-inspection.js";
 import { InspectionFields, InspectionStatus } from "./InspectionFields.js";
 import { Button, FieldMessage } from "./components/ui.js";
+import { ContinuityPanel } from "./ContinuityPanel.js";
 export interface InspectionDetailProps {
   token: string;
   selected: string | undefined;
@@ -73,6 +74,9 @@ export function ModuleRuntimeSection({
   }
   return (
     <section aria-label="模块运行检查" className="module-runtime">
+      {module.definitionId === "agent.continuity" && (
+        <ContinuityPanel token={token} revision={revision} select={select} />
+      )}
       {!module.bindings.length && (
         <FieldMessage>
           当前未激活。下方仍可查看持久化历史与共享数据。

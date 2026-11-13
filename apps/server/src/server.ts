@@ -142,6 +142,7 @@ import {
   type ServerConfig,
 } from "./config.js";
 import { createGatewayAuthenticator } from "./gateway-auth.js";
+import { registerContinuityRoutes } from "./continuity-routes.js";
 import { createServerAdapterHost } from "./adapter-plugins.js";
 import { createConfigurationManagement } from "./configuration-management.js";
 import { AdapterHost } from "./adapter-host.js";
@@ -274,6 +275,9 @@ export async function startKaguyaServer(
       undefined,
       moduleConfigs.some(
         (item) => item.definitionId === "plugin.qq-expression" && item.enabled,
+      ),
+      moduleConfigs.some(
+        (item) => item.definitionId === "agent.continuity" && item.enabled,
       ),
     );
     pluginSnapshot = withMcpKindRegistry(
@@ -684,6 +688,10 @@ export async function startKaguyaServer(
                 (item) =>
                   item.definitionId === "plugin.qq-expression" && item.enabled,
               ),
+              snapshot.moduleConfigs.some(
+                (item) =>
+                  item.definitionId === "agent.continuity" && item.enabled,
+              ),
             ),
           }),
         );
@@ -1003,6 +1011,7 @@ export async function startKaguyaServer(
       gatewayAuth,
       () => runtime?.guiTasks,
     );
+    registerContinuityRoutes(app!, () => database, gatewayAuth);
     await assembly.mount(
       "http",
       ["configuration", "logging"],
