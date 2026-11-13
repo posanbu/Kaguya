@@ -1,15 +1,17 @@
-description: 人物背景多轮对照。两组使用相同 Heavy 模型，逐例人工检查自然度。
+description: 人物认识端到端对照。原始对话形成认识，发布后冻结读取，再检查实际回答。
 prompts:
   - "评测 {{caseId}}"
 providers:
   - id: file://portrait-behavior-provider.cjs
-    label: 有相关背景
+    label: 改进模板
     config:
-      background: true
+      variant: candidate
+      reasoning: minimal
   - id: file://portrait-behavior-provider.cjs
-    label: 只有关系摘要
+    label: 基线模板
     config:
-      background: false
+      variant: baseline
+      reasoning: minimal
 tests: file://portrait-behavior-cases.json
 defaultTest:
   assert:

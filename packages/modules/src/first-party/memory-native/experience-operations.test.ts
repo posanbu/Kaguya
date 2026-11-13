@@ -220,6 +220,106 @@ it("selects the new operation schema only for requests that persist its policy",
 describe.each(backends)(
   "automatic experience operations ($name)",
   ({ create }) => {
+    it("keeps inferred portraits scoped and retracts dependent summaries without rewriting old snapshots", async () => {
+      const f = await fixture(create);
+      try {
+        const experiment = await f.source("experiment", "实验又得重跑了");
+        const meeting = await f.source("meeting", "导师让我组会前整理结果");
+        const evidence = {
+          basis: "inference" as const,
+          temporality: "recent" as const,
+          observedAt: at,
+          validFrom: null,
+          validUntil: null,
+          sourceScope: scope,
+          supersedes: [],
+        };
+        const detail = {
+          key: "understanding",
+          kind: "person",
+          ownerId: "person:a",
+          scope,
+          level: 1,
+          content: "结合实验与组会线索，看来在参与科研。具体职位待确认。",
+          sourceIds: [meeting.id],
+          aliases: [],
+          tags: [],
+          status: "active",
+          evidence,
+        };
+        expect(
+          await f.form(
+            "portrait",
+            await f.freeze(),
+            {
+              nodes: [
+                {
+                  ...detail,
+                  key: "experiment-evidence",
+                  level: 2,
+                  content: "本人表示实验需要重跑。",
+                  sourceIds: [experiment.id],
+                  evidence: { ...evidence, basis: "self-report" },
+                },
+                detail,
+                { ...detail, key: "summary", level: 0 },
+              ],
+              edges: [
+                {
+                  sourceId: "summary",
+                  targetId: "understanding",
+                  relation: "summarizes",
+                },
+                {
+                  sourceId: "understanding",
+                  targetId: "experiment-evidence",
+                  relation: "derived-from",
+                },
+              ],
+            },
+            [experiment, meeting],
+          ),
+        ).toMatchObject({ status: "completed" });
+        const snapshot = await f.memory.freeze({ ...read, query: "" });
+        if (!snapshot.cutoff) throw new Error("Missing publication cutoff");
+        expect(snapshot.fixed[0]?.metadata.evidence?.basis).toBe("inference");
+        const privateRead = {
+          ...read,
+          scope: JSON.stringify(["qq", "qq", "private", "a"]),
+          query: "",
+        };
+        expect((await f.memory.freeze(privateRead)).fixed).toEqual([]);
+        await f.memory.publish({
+          operationId: "withdraw-experiment",
+          actor: "manual",
+          nodes: [],
+          invalidations: [
+            {
+              kind: "source-withdrawal",
+              targetId: experiment.id,
+              reason: "原线索撤回",
+            },
+          ],
+        });
+        expect((await f.memory.freeze({ ...read, query: "" })).fixed).toEqual(
+          [],
+        );
+        const old = await f.memory.freeze({
+          ...read,
+          query: "",
+          cutoff: snapshot.cutoff,
+        });
+        expect(old.fixed).toEqual(snapshot.fixed);
+        expect(
+          await f.db.memoryGraph.native.history(
+            stableId("portrait", "summary"),
+          ),
+        ).toHaveLength(1);
+      } finally {
+        await f.close();
+      }
+    });
+
     it("checks the frozen input versions even when archive revisions match current rows", async () => {
       const f = await fixture(create);
       try {
