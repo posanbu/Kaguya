@@ -21,13 +21,7 @@ if (process.env.KAGUYA_REQUIRE_POSTGRES_TESTS === "1" && !pg)
 const backends = [
   { name: "PGlite", create: createTestingDatabase },
   ...(pg
-    ? Array.from(
-        { length: Number(process.env.KAGUYA_CI_REPRO_ATTEMPTS ?? 1) },
-        (_, index) => ({
-          name: `PostgreSQL ${index + 1}`,
-          create: () => createPostgresTestingDatabase(pg),
-        }),
-      )
+    ? [{ name: "PostgreSQL", create: () => createPostgresTestingDatabase(pg) }]
     : []),
 ];
 describe.each(backends)(

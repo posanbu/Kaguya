@@ -102,7 +102,6 @@ jobs:
 
     env:
       KAGUYA_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
-      KAGUYA_CI_REPRO_ATTEMPTS: "5"
 
     services:
       postgres:
