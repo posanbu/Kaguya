@@ -18,6 +18,9 @@ import baseConfig from "./vitest.config";
 // 新增关键行为时维护此清单。每日全量测试仍使用基础配置收集全部测试。
 const criticalTests = [
   "packages/database/src/continuity-store.test.ts",
+  "packages/composition/src/continuity.test.ts",
+  "packages/composition/src/continuity-delivery.test.ts",
+  "packages/modules/src/first-party/continuity/index.test.ts",
   "packages/config/src/model.test.ts",
   "packages/config/src/manager.test.ts",
   "packages/config/src/module-config.test.ts",

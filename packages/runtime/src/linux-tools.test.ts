@@ -202,6 +202,11 @@ describe("Linux native shell registry", () => {
           toolIds: ["shell.exec"],
         },
         {
+          definitionId: "agent.continuity",
+          taskId: "agent.continuity.execute",
+          toolIds: ["shell.exec"],
+        },
+        {
           definitionId: "agent.heavy",
           taskId: "agent.gui.execute",
           routeId: "gui.approved",

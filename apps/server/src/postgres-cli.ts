@@ -36,6 +36,8 @@ const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(serverRoot, "../..");
 export const POSTGRES_TEST_FILES = [
   "packages/database/src/continuity-store.test.ts",
+  "packages/composition/src/continuity.test.ts",
+  "packages/composition/src/continuity-delivery.test.ts",
   "packages/modules/src/first-party/heavy/frozen-context-persistence.test.ts",
   "packages/database/src/reliable-runner.test.ts",
   "packages/modules/src/first-party/router/index.test.ts",

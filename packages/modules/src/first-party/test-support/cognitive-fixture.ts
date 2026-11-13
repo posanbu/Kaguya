@@ -1,3 +1,7 @@
+import {
+  lifecycleStartupCapability,
+  lifecycleStartedInformationKind,
+} from "../lifecycle/pulse.js";
 /**
  * ModuleHost 与 Core 共用可控时钟，模块派生事实和限频测试不会混用墙钟。
  * 功能概述：认知模块测试的真实 PGlite、Core 与 ModuleHost 夹具，验证引用校验、幂等槽与调度持久化。
@@ -5,7 +9,7 @@
  * restart 关闭并重建宿主和 Core，保留数据库；close 由测试 finally 调用，不连接真实模型或平台。
  */
 import { closeTestResources } from "./cleanup.js";
-import type { KaguyaDatabase } from "@kaguya/database";
+import { PostgresContinuityStore, type KaguyaDatabase } from "@kaguya/database";
 import {
   nativeMemoryCapability,
   memoryFormationCapability,
@@ -20,6 +24,7 @@ import {
 import { z } from "@kaguya/schema";
 import {
   observationCapability,
+  continuityCapability,
   actionRunValidityCapability,
   defineInformationKind,
   defineModuleCapability,
@@ -156,6 +161,23 @@ export async function cognitiveFixture(
       core,
       catalog,
       capabilities: [
+        {
+          capability: lifecycleStartupCapability,
+          value: {
+            start: async (instanceId: string) => {
+              await core.register(lifecycleStartedInformationKind, {
+                source: `module:${instanceId}`,
+                occurredAt: new Date(now).toISOString(),
+                payload: { instanceId, at: new Date(now).toISOString() },
+                references: [],
+              });
+            },
+          },
+        },
+        {
+          capability: continuityCapability,
+          value: new PostgresContinuityStore(database.sql, () => new Date(now)),
+        },
         { capability: observationCapability, value: database.observations },
         { capability: actionRunValidityCapability, value: database.actions },
         {

@@ -24,6 +24,8 @@
  * Situation 先恢复或登记固定 frame 和观察清单；observe gate 在模型调用前确认完整页并发布连续进度，缺口保留待处理。
  */
 import { InformationIntegrityError } from "@kaguya/sdk";
+import { continuityCapability } from "@kaguya/sdk";
+import { continuityAppraisalCapability } from "../continuity/index.js";
 import { frozenContextFailure } from "../heavy/message-context.js";
 import {
   observationCompleted,
@@ -154,6 +156,7 @@ interface LightDispatch {
 }
 
 export interface CreateRouterModuleOptions {
+  readonly continuityEnabled?: boolean;
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly rawContextCapability: ModuleCapability<RawContextAccess>;
   readonly nativeMemoryCapability?: ModuleCapability<NativeMemoryAccess>;
@@ -857,6 +860,9 @@ function createRoutingModule(
       ],
       promptRenderers: [],
       requires: [
+        ...(options.continuityEnabled
+          ? [continuityCapability, continuityAppraisalCapability]
+          : []),
         observationCapability,
         actionRunValidityCapability,
         oneShotScheduleCapability,
@@ -977,6 +983,20 @@ function createRoutingModule(
             let snapshot:
               Awaited<ReturnType<RawContextAccess["freeze"]>> | undefined;
             if (!raw) {
+              const continuous = options.continuityEnabled
+                ? await (async () => {
+                    const scope = memoryScope(payload.source);
+                    await context
+                      .use(continuityAppraisalCapability)
+                      .appraise(turn, scope, context);
+                    return context.use(continuityCapability).freeze({
+                      agentId: "kaguya",
+                      scope,
+                      operationId: `${turn.informationId}:chat`,
+                      basis: [turn.informationId],
+                    });
+                  })()
+                : undefined;
               snapshot = await context
                 .use(options.rawContextCapability)
                 .freeze({
@@ -997,9 +1017,22 @@ function createRoutingModule(
                 {
                   payload: {
                     turnInformationId: turn.informationId,
+                    ...(continuous
+                      ? {
+                          continuousAgent: {
+                            informationId: continuous.informationId,
+                            view: jsonObjectSchema.parse(continuous.view),
+                          },
+                        }
+                      : {}),
                     global: {
                       text: [
                         snapshot.global.text,
+                        ...(continuous
+                          ? [
+                              `持续自我、状态与活动（冻结事实，过期状态不能当作当前情绪）：${JSON.stringify(continuous.view)}`,
+                            ]
+                          : []),
                         ...(activity
                           ? [
                               `当前生命周期（内部规则状态，不是消息正文）：${JSON.stringify(activity.payload)}`,
@@ -1008,6 +1041,7 @@ function createRoutingModule(
                       ].join("\n\n"),
                       informationIds: [
                         ...snapshot.global.informationIds,
+                        ...(continuous ? [continuous.informationId] : []),
                         ...(activity ? [activity.informationId] : []),
                       ],
                     },
@@ -2418,7 +2452,7 @@ async function finishDelivery(
 ) {
   const request = outgoingStatusTarget(terminal, atoms);
   const turn = (request?.payload as any)?.turn;
-  if (request === undefined || turn === undefined) return;
+  if (request === undefined || turn == null) return;
   if (
     delivered &&
     (request.payload.speech as { continuation?: string | null } | undefined)

@@ -31,7 +31,10 @@
 import {
   nativeToolInformationKinds,
   actionDecisionInformationKind,
+  continuityCapability,
 } from "@kaguya/sdk";
+import { z } from "@kaguya/schema";
+import { createContinuityTools } from "./continuity-tools.js";
 import {
   MessageTargetService,
   type AuthorizedMessagePromptRenderer,
@@ -46,6 +49,8 @@ import {
   InformationLogProjectionRunner,
   KaguyaDatabase,
   PostgresNativeVectorRetriever,
+  PostgresContinuityStore,
+  actionDigest,
   UnsupportedDatabaseSchemaError,
 } from "@kaguya/database";
 import {
@@ -744,13 +749,28 @@ export class KaguyaRuntime implements InformationIngress {
             })
           : this.options.capabilities;
       const enabledSuppliedCapabilities = suppliedCapabilities ?? [];
+      if (
+        !this.options.activations.some(
+          (a) => a.enabled !== false && a.definitionId === "agent.continuity",
+        )
+      ) {
+        const previous = await database.continuity.read("kaguya", "shared");
+        if (previous?.policy.enabled)
+          await database.continuity.configure({
+            agentId: "kaguya",
+            operationId: `runtime-disable:${previous.policyInformationId}`,
+            expectedRevision: previous.revision,
+            policy: { ...previous.policy, enabled: false },
+            basis: [previous.policyInformationId],
+          });
+      }
       await database.actions.recoverExpired();
       if (
-        this.options.actionProviders?.some(
-          (p) => p.id === "core.native-memory",
+        this.options.actionProviders?.some((p) =>
+          ["core.native-memory", "core.continuity"].includes(p.id),
         ) ||
-        this.options.nativeTools?.registrations.some(
-          (t) => t.providerId === "core.native-memory",
+        this.options.nativeTools?.registrations.some((t) =>
+          ["core.native-memory", "core.continuity"].includes(t.providerId),
         )
       )
         throw new Error("Reserved native Memory provider");
@@ -758,7 +778,7 @@ export class KaguyaRuntime implements InformationIngress {
         this.options.nativeTools?.memory && memoryEnabled
           ? createNativeMemoryTools(database)
           : undefined;
-      const nativeOptions =
+      let nativeOptions =
         this.options.nativeTools && memoryTools
           ? {
               ...this.options,
@@ -771,11 +791,71 @@ export class KaguyaRuntime implements InformationIngress {
               },
             }
           : this.options;
+      if (
+        this.options.activations.some(
+          (a) =>
+            a.enabled !== false &&
+            a.definitionId === "agent.continuity" &&
+            z
+              .object({ autonomous: z.literal(true) })
+              .passthrough()
+              .safeParse(a.settings).success,
+        ) &&
+        (!memoryEnabled ||
+          !nativeOptions.nativeTools?.tasks.some(
+            (t) =>
+              t.definitionId === "agent.continuity" &&
+              t.taskId === "agent.continuity.execute" &&
+              t.toolIds.length > 0,
+          ))
+      )
+        throw new Error(
+          "Autonomous activity requires native Memory and configured execution tools",
+        );
+      const continuityTools =
+        memoryEnabled &&
+        this.options.activations.some(
+          (a) => a.enabled !== false && a.definitionId === "agent.continuity",
+        )
+          ? createContinuityTools(database, core, {
+              actions: () => this.actions,
+              registration: (id) =>
+                nativeOptions.nativeTools?.registrations.find(
+                  (r) => r.id === id,
+                ),
+            })
+          : undefined;
+      if (continuityTools && nativeOptions.nativeTools)
+        nativeOptions = {
+          ...nativeOptions,
+          nativeTools: {
+            ...nativeOptions.nativeTools,
+            registrations: [
+              ...nativeOptions.nativeTools.registrations,
+              ...continuityTools.registrations,
+            ],
+            tasks: nativeOptions.nativeTools.tasks.map((task) =>
+              task.definitionId === "agent.continuity" &&
+              task.taskId === "agent.continuity.execute"
+                ? {
+                    ...task,
+                    toolIds: [
+                      ...new Set([
+                        ...task.toolIds,
+                        ...continuityTools.registrations.map((t) => t.id),
+                      ]),
+                    ],
+                  }
+                : task,
+            ),
+          },
+        };
       this.#actionExecutor = new ActionExecutor({
         store: database.actions,
         providers: [
           ...(this.options.actionProviders ?? []),
           ...(memoryTools ? [memoryTools.provider] : []),
+          ...(continuityTools ? [continuityTools.provider] : []),
         ],
         core,
         ...this.options.actionEnvironment,
@@ -786,7 +866,31 @@ export class KaguyaRuntime implements InformationIngress {
           ),
       });
       this.#actionExecutor.startRecovery();
+      await database.continuity.recoverCoordination();
       const capabilities = [
+        {
+          capability: continuityCapability,
+          value: new PostgresContinuityStore(database.sql, this.#now, () => {
+            const approved =
+              nativeOptions.nativeTools?.tasks.find(
+                (t) =>
+                  t.definitionId === "agent.continuity" &&
+                  t.taskId === "agent.continuity.execute",
+              )?.toolIds ?? [];
+            const tools = (nativeOptions.nativeTools?.registrations ?? [])
+              .filter((t) => approved.includes(t.id))
+              .map((t) => ({
+                id: t.id,
+                version: t.version,
+                providerId: t.providerId,
+                providerVersion: t.providerVersion,
+                policyVersion: t.policyVersion,
+                readonly: t.readonly,
+                independent: t.independent,
+              }));
+            return { version: actionDigest(tools), tools };
+          }),
+        },
         { capability: actionCapability, value: this.#actionExecutor },
         { capability: actionRunValidityCapability, value: database.actions },
         { capability: observationCapability, value: database.observations },
@@ -1283,9 +1387,14 @@ export class KaguyaRuntime implements InformationIngress {
       );
       return;
     }
-    const targetAuthorized =
-      request.payload.platform === "web" ||
-      (await this.#messageTargets!.validateDelivery(request));
+    const continuityDelivery = await required(
+      this.#database,
+      "database",
+    ).continuity.deliveryAuthorization(request.informationId);
+    const targetAuthorized = continuityDelivery
+      ? continuityDelivery.valid
+      : request.payload.platform === "web" ||
+        (await this.#messageTargets!.validateDelivery(request));
     if (
       !(
         this.options.outboundAllowlist ?? new GatewayAllowlist()
@@ -1781,6 +1890,34 @@ function composeModelTaskCapabilities(
         {
           ...options.modelTask,
           ...context,
+          ...(native
+            ? {
+                beforeAttempt: async (
+                  requestedId: string,
+                  activation: ModuleActivationProvenance,
+                  taskId: string,
+                  attempt: number,
+                  invocationId: string,
+                ) => {
+                  if (activation.definitionId !== "agent.continuity") return;
+                  const charge = await native.db.continuity.charge({
+                    agentId: "kaguya",
+                    operationId: `model:${requestedId}:${invocationId}:${attempt}`,
+                    purpose:
+                      attempt > 1
+                        ? "retry"
+                        : taskId.endsWith("appraise")
+                          ? "appraisal"
+                          : taskId.endsWith("choose")
+                            ? "choice"
+                            : "execution",
+                    basis: [requestedId],
+                  });
+                  if (!charge.allowed)
+                    throw new Error("autonomous-budget-exhausted");
+                },
+              }
+            : {}),
           ...(options.nativeTools?.readArtifact
             ? { readNativeArtifact: options.nativeTools.readArtifact }
             : {}),

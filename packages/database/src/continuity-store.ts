@@ -848,6 +848,9 @@ export class PostgresContinuityStore implements ContinuityAccess {
                 b.kind,
               ) &&
               b.payload.outcome?.status === "succeeded" &&
+              !["fenced", "unconfirmed"].includes(
+                b.payload.outcome?.environmentValidation,
+              ) &&
               b.payload.intent?.scope === source.scope,
           )
         )
@@ -885,7 +888,12 @@ export class PostgresContinuityStore implements ContinuityAccess {
           resource.scope,
           tx,
         );
-        if (receipt.outcome.status !== "succeeded")
+        if (
+          receipt.outcome.status !== "succeeded" ||
+          ["fenced", "unconfirmed"].includes(
+            receipt.outcome.environmentValidation ?? "",
+          )
+        )
           throw new Error("unproven-resource");
         if (
           !resource.artifactId ||

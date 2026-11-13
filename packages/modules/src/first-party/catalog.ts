@@ -1,4 +1,5 @@
 import { textMessageOutputModule } from "./message-output/index.js";
+import { createContinuityModule } from "./continuity/index.js";
 /**
  * QQ 表情独立进入 Catalog 和生产默认配置，显式关闭后不安装 Heavy 草稿处理路径。
  * 功能概述：集中显式导入 first-party 模块，提供可被 composition root 选择和合并的 Catalog。
@@ -55,6 +56,8 @@ export function createFirstPartyModuleCatalog<
       readonly nativeMemoryTemplate: string;
       readonly qqExpressionTemplates: { learn: string; select: string };
       readonly qqExpressionEnabled?: boolean;
+      readonly continuityTemplate?: string;
+      readonly continuityEnabled?: boolean;
     },
 ) {
   return defineInformationModuleCatalog(
@@ -73,6 +76,21 @@ export function createFirstPartyModuleCatalog<
       draftProcessingEnabled: options.qqExpressionEnabled ?? false,
     }),
     textMessageOutputModule,
+    ...(options.continuityTemplate
+      ? [
+          createContinuityModule({
+            modelTaskCapability: options.modelTaskCapability,
+            template: options.continuityTemplate,
+            identity: options.agentIdentity,
+            ...(options.deliveryDeliveredInformationKind
+              ? {
+                  deliveryDeliveredInformationKind:
+                    options.deliveryDeliveredInformationKind,
+                }
+              : {}),
+          }),
+        ]
+      : []),
     createRouterModule(options),
     createSituationRuntimeModule(options),
   );
@@ -144,6 +162,13 @@ export function createFirstPartyModuleConfigDefaults(
         staleAfterMs: 120_000,
       }),
     }),
+    Object.freeze({
+      version: 1 as const,
+      instanceId: "continuity.default",
+      definitionId: "agent.continuity",
+      enabled: false,
+      settings: Object.freeze({}),
+    }),
     ...(profile === "production"
       ? [
           {
@@ -184,6 +209,15 @@ export function createFirstPartyModuleActivations(
           : [config],
       )
       .filter((config) => !config.definitionId.startsWith("adapter."))
+      // 旧的嵌入式 Catalog 可不提供新增的、默认关闭的持续活动资源。
+      .filter(
+        (config) =>
+          config.definitionId !== "agent.continuity" ||
+          config.enabled ||
+          catalog.definitions.some(
+            (d) => d.manifest.definitionId === config.definitionId,
+          ),
+      )
       .map((config) => {
         if (
           config.definitionId === "demo.reply.llm" ||
