@@ -19027,7 +19027,7 @@
   ],
   "testArtifacts": [
     {
-      "artifactName": "43427732685-critical-1-attempt-1",
+      "artifactName": "critical-1-attempt-1",
       "sha256": "f923d7c049d33e03ad8532389617edefe06fcb0bd71ee4e2e24653b159f280a0",
       "tests": {
         "numTotalTests": 261,
@@ -19059,10 +19059,14 @@
           "workerSeconds": 19.54343994140625
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43427732685,
+      "artifactId": 14037004490,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14037004490/zip",
+      "expiresAt": "2027-02-11T12:44:31Z"
     },
     {
-      "artifactName": "43427732685-critical-2-attempt-1",
+      "artifactName": "critical-2-attempt-1",
       "sha256": "c42ee571791ccf17a9db6f7e3601c767c2f4587d07675568cd450662d7de4dac",
       "tests": {
         "numTotalTests": 440,
@@ -19094,10 +19098,14 @@
           "workerSeconds": 51.4420234375
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43427732685,
+      "artifactId": 14038553492,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14038553492/zip",
+      "expiresAt": "2027-02-11T12:44:31Z"
     },
     {
-      "artifactName": "43427732685-critical-3-attempt-1",
+      "artifactName": "critical-3-attempt-1",
       "sha256": "b864ca3b3cc341a7ae49da4d11916bd1cc80a3a937a72d80643a1ed8e2bd65dd",
       "tests": {
         "numTotalTests": 281,
@@ -19134,10 +19142,14 @@
           "file": "Kaguya/apps/server/src/mcp-host.test.ts",
           "test": "keeps a candidate MCP owner when Runtime rebuild and candidate cleanup both fail"
         }
-      ]
+      ],
+      "sourceRunId": 43427732685,
+      "artifactId": 14038098449,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14038098449/zip",
+      "expiresAt": "2027-02-11T12:44:31Z"
     },
     {
-      "artifactName": "43427732685-critical-4-attempt-1",
+      "artifactName": "critical-4-attempt-1",
       "sha256": "e56574c42d80d1d1c1b9f7157e3bf9468a83e50d1b7beb77f7fa1947fa23fd08",
       "tests": {
         "numTotalTests": 520,
@@ -19169,10 +19181,14 @@
           "workerSeconds": 45.77495263671875
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43427732685,
+      "artifactId": 14038274779,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14038274779/zip",
+      "expiresAt": "2027-02-11T12:44:31Z"
     },
     {
-      "artifactName": "43427732685-routing-attempt-1",
+      "artifactName": "routing-attempt-1",
       "sha256": "a73247fe075d399f49f6155aa190f93e8cd7df1c761501817950f5602cdee69d",
       "tests": {
         "numTotalTests": 74,
@@ -19200,10 +19216,14 @@
           "workerSeconds": 0.03518359375
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43427732685,
+      "artifactId": 14038018574,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14038018574/zip",
+      "expiresAt": "2027-02-11T12:44:31Z"
     },
     {
-      "artifactName": "43497303389-critical-1-attempt-1",
+      "artifactName": "critical-1-attempt-1",
       "sha256": "74daca1232fe7975a59a91a23b9deead444450d38e40ef7e3a0827686e9820e7",
       "tests": {
         "numTotalTests": 266,
@@ -19235,10 +19255,14 @@
           "workerSeconds": 16.60242724609375
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43497303389,
+      "artifactId": 14072972063,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14072972063/zip",
+      "expiresAt": "2027-02-11T19:59:16Z"
     },
     {
-      "artifactName": "43497303389-critical-2-attempt-1",
+      "artifactName": "critical-2-attempt-1",
       "sha256": "820a7b7f139c37f66b838cb9b49f1ca3e5dded10a3aac00b4bc81c5fddc8bd20",
       "tests": {
         "numTotalTests": 436,
@@ -19270,10 +19294,14 @@
           "workerSeconds": 23.4082529296875
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43497303389,
+      "artifactId": 14072098386,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14072098386/zip",
+      "expiresAt": "2027-02-11T19:59:16Z"
     },
     {
-      "artifactName": "43497303389-critical-3-attempt-1",
+      "artifactName": "critical-3-attempt-1",
       "sha256": "54483943725846450660058e473a541effb39808d4893621dfee9827b812a866",
       "tests": {
         "numTotalTests": 286,
@@ -19305,10 +19333,14 @@
           "workerSeconds": 24.6989853515625
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43497303389,
+      "artifactId": 14073316517,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14073316517/zip",
+      "expiresAt": "2027-02-11T19:59:16Z"
     },
     {
-      "artifactName": "43497303389-critical-4-attempt-1",
+      "artifactName": "critical-4-attempt-1",
       "sha256": "2641908fc6fc8c36ea1b4d8e0ed0e0d5a5a30b994e0ee61ea3eb055869915f0f",
       "tests": {
         "numTotalTests": 537,
@@ -19340,10 +19372,14 @@
           "workerSeconds": 31.070255615234377
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43497303389,
+      "artifactId": 14072957051,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14072957051/zip",
+      "expiresAt": "2027-02-11T19:59:16Z"
     },
     {
-      "artifactName": "43497303389-routing-attempt-1",
+      "artifactName": "routing-attempt-1",
       "sha256": "a176692dc9fc541ff72e0f698a6625486e597c0d16776b909f317613634ab48f",
       "tests": {
         "numTotalTests": 75,
@@ -19371,7 +19407,11 @@
           "workerSeconds": 0.04620947265625
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43497303389,
+      "artifactId": 14073105802,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14073105802/zip",
+      "expiresAt": "2027-02-11T19:59:16Z"
     },
     {
       "artifactName": "full-macos-latest-1-attempt-1",
@@ -19406,7 +19446,11 @@
           "workerSeconds": 69.65266528320312
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43556834562,
+      "artifactId": 14099065943,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14099065943/zip",
+      "expiresAt": "2027-02-12T04:28:38Z"
     },
     {
       "artifactName": "full-macos-latest-2-attempt-1",
@@ -19441,7 +19485,11 @@
           "workerSeconds": 46.90783447265625
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43556834562,
+      "artifactId": 14098074180,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14098074180/zip",
+      "expiresAt": "2027-02-12T04:28:38Z"
     },
     {
       "artifactName": "full-ubuntu-latest-1-attempt-1",
@@ -19476,7 +19524,11 @@
           "workerSeconds": 63.17314453125
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43556834562,
+      "artifactId": 14097914827,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14097914827/zip",
+      "expiresAt": "2027-02-12T04:28:38Z"
     },
     {
       "artifactName": "full-ubuntu-latest-2-attempt-1",
@@ -19511,7 +19563,11 @@
           "workerSeconds": 78.09062963867187
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43556834562,
+      "artifactId": 14098479757,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14098479757/zip",
+      "expiresAt": "2027-02-12T04:28:38Z"
     },
     {
       "artifactName": "full-windows-latest-1-attempt-1",
@@ -19546,7 +19602,11 @@
           "workerSeconds": 59.86434497070312
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43556834562,
+      "artifactId": 14099290000,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14099290000/zip",
+      "expiresAt": "2027-02-12T04:28:38Z"
     },
     {
       "artifactName": "full-windows-latest-2-attempt-1",
@@ -19581,7 +19641,11 @@
           "workerSeconds": 75.42474243164062
         }
       ],
-      "failures": []
+      "failures": [],
+      "sourceRunId": 43556834562,
+      "artifactId": 14099176150,
+      "archiveDownloadUrl": "https://api.github.com/repos/posanbu/Kaguya/actions/artifacts/14099176150/zip",
+      "expiresAt": "2027-02-12T04:28:38Z"
     }
   ]
 }

@@ -137,7 +137,7 @@ export function markdown(reports) {
   const lines = [
     "# CI 耗时观测",
     "",
-    "范围仅含 Test 工作流；创建时间指工作流运行创建时间，不是 PR 创建时间。NapCat、Linux tools 和其他独立检查未计入，不能据此判断全部 PR 检查是否在三分钟内完成。",
+    "范围仅含 Test 工作流；从工作流运行创建时间开始计时。PR 创建至全部检查结束的时间，以及 NapCat、Linux tools 等独立检查，仍需另外核对。",
     "",
     `PR 首次尝试非取消样本 ${prs.length} 次，其中创建至完成超过 180 秒 ${over.length} 次，耗时未知 ${unknown.length} 次。`,
     `每日全量样本 ${daily.length} 次，通过 ${daily.filter((run) => run.conclusion === "success").length} 次。`,
