@@ -21,10 +21,10 @@ import {
   assertSupportedPostgresVersion,
   type SqlDatabase,
 } from "@kaguya/database";
-import { migrateLifecycleConfig, parseCordisTreeText } from "@kaguya/config";
+import { parseCordisTreeText } from "@kaguya/config";
+import { migrateFirstPartyConfig } from "./configuration-migrations.js";
 import {
   createFirstPartyModuleConfigDefaults,
-  lifecycleSettingsSchema,
   offlineFirstPartyKinds,
 } from "@kaguya/modules";
 import { createRuntimeKindRegistry } from "@kaguya/runtime";
@@ -418,10 +418,9 @@ export async function runOfflineUpgrade(
         : null;
       if (command === "apply") {
         // advisory 锁跨越配置迁移；文件 journal 可独立重放，SQL 提交失败时不能恢复旧数据覆盖新事实。
-        await migrateLifecycleConfig(
+        await migrateFirstPartyConfig(
           target.configRoot,
           createFirstPartyModuleConfigDefaults(),
-          lifecycleSettingsSchema,
         );
       }
       return {

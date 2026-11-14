@@ -60,8 +60,7 @@ import {
   withMcpKindRegistry,
 } from "./mcp-host.js";
 import { type McpHost } from "@kaguya/mcp";
-import { migrateLifecycleConfig } from "@kaguya/config";
-import { lifecycleSettingsSchema } from "@kaguya/modules";
+import { migrateFirstPartyConfig } from "./configuration-migrations.js";
 import { ModuleTemplateManagement } from "./module-template-management.js";
 import { IdentityPersonaManagement } from "./identity-persona-management.js";
 import { ModuleSettingsManagement } from "./module-settings-management.js";
@@ -237,10 +236,9 @@ export async function startKaguyaServer(
               : {}),
           };
     await FileUserConfigManager.inspect({ rootDir: bootstrap.configRoot });
-    await migrateLifecycleConfig(
+    await migrateFirstPartyConfig(
       bootstrap.configRoot,
       createFirstPartyModuleConfigDefaults("production", workspaceIdentity()),
-      lifecycleSettingsSchema,
     );
     configuration = await createConfigurationManagement(bootstrap.configRoot);
     configurationStatus = await configuration.getRegistryStatus();
