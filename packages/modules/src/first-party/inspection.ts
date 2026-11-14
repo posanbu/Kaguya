@@ -88,7 +88,7 @@ export const firstPartyInspection = {
     mechanism: [
       "按平台、适配器和目标解析会话范围。",
       "关联账号与人物实体；无法确认时明确记录 unresolved 或 ambiguous。",
-      "人物画像由管理端手动维护；保存后重启服务才进入 Light 与 Heavy，Memory 自动提取尚未接入。",
+      "人物认识由现有 Memory 从对话形成并持续修订，区分本人自述、第三方描述、实际观察、Kaguya 的印象和对方反馈。",
     ],
     views: [
       view(

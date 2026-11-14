@@ -2,7 +2,88 @@ import {
   modelRequestMetricsSchema,
   type ModelMetricsWindow,
   type ModelRequestMetrics,
+  continuityViewSchema,
+  personContinuitySchema,
+  activitySchema,
+  z,
 } from "@kaguya/schema";
+
+const continuousViewResponse = z.object({
+  view: continuityViewSchema.nullable(),
+  scope: z.string(),
+  scopes: z.array(z.string()),
+});
+export async function getPersonContinuity(
+  config: GatewayConfig,
+  personId: string,
+  scope: string,
+  signal: AbortSignal,
+) {
+  const response = await requestAuthenticatedJson(
+    config,
+    `/api/v1/continuity/people/${encodeURIComponent(personId)}${scope ? `?${new URLSearchParams({ scope })}` : ""}`,
+    { method: "GET", signal, cache: "no-store" },
+    fetch,
+  );
+  if (!response.ok)
+    throw new GatewayRequestError(
+      "人物关系读取失败，请刷新重试",
+      "person_continuity_read_failed",
+      response.status,
+    );
+  return personContinuitySchema.parse(await response.json());
+}
+export async function getContinuousAgent(
+  config: GatewayConfig,
+  scope: string,
+  signal: AbortSignal,
+) {
+  const response = await requestAuthenticatedJson(
+    config,
+    `/api/v1/continuity${scope ? `?${new URLSearchParams({ scope })}` : ""}`,
+    { method: "GET", signal, cache: "no-store" },
+    fetch,
+  );
+  if (!response.ok)
+    throw new GatewayRequestError(
+      "活动读取失败，请刷新重试",
+      "continuity_read_failed",
+      response.status,
+    );
+  return continuousViewResponse.parse(await readJson(response));
+}
+export async function controlActivity(
+  config: GatewayConfig,
+  id: string,
+  input: {
+    scope: string;
+    operationId: string;
+    expectedRevision: number;
+    action: "pause" | "resume" | "abandon";
+  },
+) {
+  const response = await requestAuthenticatedJson(
+    config,
+    `/api/v1/continuity/activities/${encodeURIComponent(id)}/control`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      cache: "no-store",
+    },
+    fetch,
+  );
+  const body = await readJson(response);
+  if (!response.ok)
+    throw new GatewayRequestError(
+      response.status === 409
+        ? "活动已变化，或当前条件不允许此操作。请刷新后核对。"
+        : "操作结果暂时未知。请先刷新核对，再重试原操作。",
+      "continuity_control_failed",
+      response.status,
+    );
+  return z.object({ activity: activitySchema }).parse(body).activity;
+}
 
 /**
  * Web 会话通过 getConversationMessages 增量读取已持久化的双向消息；sendMessage 可携带

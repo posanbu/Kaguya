@@ -17,6 +17,12 @@ import baseConfig from "./vitest.config";
 // PR 必须执行这些文件中的全部用例。通过分片控制耗时，不按用例名称过滤。
 // 新增关键行为时维护此清单。每日全量测试仍使用基础配置收集全部测试。
 const criticalTests = [
+  "packages/database/src/postgres-testing-isolation.test.ts",
+  "packages/database/src/continuity-store.test.ts",
+  "packages/composition/src/continuity.test.ts",
+  "packages/composition/src/continuity-delivery.test.ts",
+  "packages/modules/src/first-party/continuity/index.test.ts",
+  "apps/server/src/continuity-routes.test.ts",
   "packages/config/src/model.test.ts",
   "packages/config/src/manager.test.ts",
   "packages/config/src/module-config.test.ts",
@@ -119,6 +125,9 @@ if (process.env.CI && !process.env.KAGUYA_TEST_DATABASE_URL?.trim()) {
 
 export default mergeConfig(baseConfig, {
   test: {
+    // 完整 Runtime/PGlite 文件各自占用较多资源，分片内串行，四个 CI 分片仍并行。
+    // 用例内部的真实数据库连接、模型和行动竞争保持并发。
+    maxWorkers: 1,
     include: criticalTests,
     passWithNoTests: false,
     allowOnly: false,

@@ -9,6 +9,7 @@
  * Runtime 装配本类，Memory/W5/W7/W8 共用注册端口。授权、目标及环境绑定只来自宿主回调。
  */
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   actionBasisDigest,
   actionDigest,
@@ -97,6 +98,8 @@ export interface NativeToolLoopOptions {
   guiTasks?: import("./gui-tasks.js").GuiTaskHost;
 }
 type Spec = {
+  readOnlyToolIds?: string[];
+  continuity?: { agentId: string; activityId: string };
   guiEnvironment?: {
     environmentId: string;
     generation: number;
@@ -128,7 +131,7 @@ const json = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 function toolSchema(tool: NativeToolRegistration) {
   return tool.jsonSchema ?? z.toJSONSchema(tool.inputSchema!, { io: "input" });
 }
-function toolBinding(tool: NativeToolRegistration) {
+export function nativeToolBinding(tool: NativeToolRegistration) {
   return actionDigest({
     id: tool.id,
     version: tool.version,
@@ -331,10 +334,24 @@ export class NativeToolLoop {
   }
   private async open<T>(key: string, request: ModelTaskRequest<T>) {
     const saved = await this.existing(request);
-    if (saved) return saved;
+    if (saved) {
+      const spec = saved.spec as unknown as Spec;
+      if (!saved.stopped_id && spec.continuity)
+        await this.deps.db.continuity.executionGate(
+          spec.continuity.agentId,
+          spec.continuity.activityId,
+          spec.actionRunInformationId,
+          "enter",
+        );
+      return saved;
+    }
     const source = await this.deps.core.get(request.sourceInformationId);
-    const turn = source?.payload.turn as
-      { claimInformationId?: string } | undefined;
+    const autonomous =
+      source?.kind === "agent.continuity.execution.frozen.v1" &&
+      request.activation.definitionId === "agent.continuity";
+    const turn = autonomous
+      ? { claimInformationId: source.informationId }
+      : (source?.payload.turn as { claimInformationId?: string } | undefined);
     if (!turn?.claimInformationId)
       throw new Error("native-tool-observation-required");
     const row = (
@@ -345,12 +362,13 @@ export class NativeToolLoop {
         manifest: any;
       }>(
         `SELECT o.observation_id,p.scene_id,p.contract,o.manifest FROM information_observations o JOIN information_observation_progress p USING(stream_id)
-      WHERE o.complete AND o.replacement_observation_id IS NULL AND o.manifest->>'runInformationId'=$1 AND p.consumer_id='agent.situation' AND ($2::text IS NULL OR o.observation_id=$2) ORDER BY o.through_position LIMIT 1`,
+      WHERE o.complete AND o.replacement_observation_id IS NULL AND o.manifest->>'runInformationId'=$1 AND p.consumer_id=$3 AND ($2::text IS NULL OR o.observation_id=$2) ORDER BY o.through_position LIMIT 1`,
         [
           turn.claimInformationId,
           source?.kind === "agent.gui.task.requested.v1"
             ? source.payload.observationId
             : null,
+          autonomous ? "agent.continuity" : "agent.situation",
         ],
       )
     ).rows[0];
@@ -389,6 +407,14 @@ export class NativeToolLoop {
     )
       throw new Error("native-gui-source-invalid");
     const spec: Spec = {
+      ...(autonomous
+        ? {
+            continuity: {
+              agentId: String((source.payload.view as any).agentId),
+              activityId: String(source.payload.activityId),
+            },
+          }
+        : {}),
       ...(gui
         ? {
             guiEnvironment: {
@@ -407,27 +433,47 @@ export class NativeToolLoop {
       deadline: new Date(Date.now() + budget.maxDurationMs).toISOString(),
       budget,
       declarations,
+      readOnlyToolIds: route.toolIds.filter(
+        (id) => this.registrations.get(id)!.readonly,
+      ),
       bindings: Object.fromEntries(
         route.toolIds.map((id) => [
           id,
-          toolBinding(this.registrations.get(id)!),
+          nativeToolBinding(this.registrations.get(id)!),
         ]),
       ),
       rootPrompt: request.prompt,
       contextInformationIds: request.contextAtoms.map((a) => a.informationId),
       memory: memory.success ? memory.data : null,
     };
-    return this.deps.db.nativeTools.open(
+    const opened = await this.deps.db.nativeTools.open(
       key,
       json(spec) as unknown as JsonObject,
       request.contextInformationId,
       [request.sourceInformationId, ...spec.contextInformationIds],
       this.deps.core.executionClaim,
     );
+    if (spec.continuity)
+      await this.deps.db.continuity.executionGate(
+        spec.continuity.agentId,
+        spec.continuity.activityId,
+        spec.actionRunInformationId,
+        "enter",
+      );
+    return opened;
   }
   private async terminal(
     row: NativeToolRunRow,
   ): Promise<ModelTaskResult<unknown>> {
+    const spec = row.spec as unknown as Spec;
+    if (spec.continuity)
+      await this.deps.db.continuity.executionGate(
+        spec.continuity.agentId,
+        spec.continuity.activityId,
+        spec.actionRunInformationId,
+        "leave",
+      );
+    else await this.deps.db.continuity.releaseChat(row.run_id);
     const atom = await this.deps.core.get(row.stopped_id!);
     if (atom?.payload.modelResult)
       return json(
@@ -506,7 +552,7 @@ export class NativeToolLoop {
       const t = this.registrations.get(d.id);
       if (
         !t ||
-        toolBinding(t) !== spec.bindings[d.id] ||
+        nativeToolBinding(t) !== spec.bindings[d.id] ||
         actionDigest(toolSchema(t)) !== actionDigest(d.inputSchema)
       )
         return this.finish(row, "unavailable");
@@ -524,6 +570,16 @@ export class NativeToolLoop {
     let supplements: z.infer<typeof nativeMemorySnapshotSchema>[] = [];
     try {
       for (let index = 0; index < budget.maxSteps; index++) {
+        if (
+          spec.continuity &&
+          !(await this.deps.db.continuity.executionGate(
+            spec.continuity.agentId,
+            spec.continuity.activityId,
+            spec.actionRunInformationId,
+            "checkpoint",
+          ))
+        )
+          return this.finish(row, "cancelled");
         const current = await this.deps.db.nativeTools.read(row.run_id);
         if (current.stopped_id) return this.terminal(current);
         if (
@@ -794,6 +850,39 @@ export class NativeToolLoop {
     if (!valid || !input || typeof input !== "object" || Array.isArray(input))
       return reject("invalid-input");
     if (blocked) return reject("prior-outcome-unconfirmed");
+    if (!spec.continuity && !(tool.readonly && tool.independent)) {
+      let admitted = false;
+      while (
+        Date.now() < Date.parse(spec.deadline) &&
+        !this.deps.core.executionSignal?.aborted
+      ) {
+        if (await this.deps.db.continuity.claimChat(row.run_id, spec.scope)) {
+          admitted = true;
+          break;
+        }
+        await delay(25, undefined, {
+          ...(this.deps.core.executionSignal
+            ? { signal: this.deps.core.executionSignal }
+            : {}),
+        }).catch(() => {});
+      }
+      if (!admitted) return reject("main-slot-busy");
+    }
+    if (
+      spec.continuity &&
+      !tool.readonly &&
+      !(
+        tool.id === "shell.exec" &&
+        ["query", "verify", "export", "stop"].includes(
+          String((input as JsonObject).mode),
+        )
+      ) &&
+      (await this.deps.db.continuity.unresolvedEffects(
+        spec.continuity.agentId,
+        spec.continuity.activityId,
+      ))
+    )
+      return reject("prior-activity-write-unconfirmed");
     let intentId = call.intent_id;
     if (!intentId) {
       const decision = await this.deps.core.registerOnce(
@@ -857,7 +946,11 @@ export class NativeToolLoop {
         arguments: args,
         dependencies,
         dependsOn: [],
-        deadline: spec.deadline,
+        deadline: spec.continuity
+          ? new Date(
+              Math.min(Date.parse(spec.deadline), Date.now() + 300000),
+            ).toISOString()
+          : spec.deadline,
         ...(binding.environment ? { environment: binding.environment } : {}),
       };
       if (!(await tool.authorize({ intent, mode: "execute" })))

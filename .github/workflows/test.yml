@@ -246,7 +246,7 @@ jobs:
         run: pnpm build
 
       - name: Run tests
-        run: pnpm test --shard=${{ matrix.shard }}/2 --reporter=default --reporter=json --outputFile=full-results.json
+        run: pnpm test --shard=${{ matrix.shard }}/2 --maxWorkers=1 --reporter=default --reporter=json --outputFile=full-results.json
 
       - name: Preserve full test timings even on failure
         if: always()

@@ -21,6 +21,11 @@ import {
 export { PostgresMediaResourceStore } from "./media-resource-store.js";
 export { PostgresMediaSourceStore } from "./media-source-store.js";
 import { prepareNativeMemoryToolSchema } from "./native-memory-tools.js";
+import {
+  prepareContinuitySchema,
+  PostgresContinuityStore,
+} from "./continuity-store.js";
+export { PostgresContinuityStore, continuityDay } from "./continuity-store.js";
 export {
   NativeMemoryTools,
   nativeMemoryToolSchemas,
@@ -120,6 +125,7 @@ export {
 } from "./native-memory.js";
 
 export class KaguyaDatabase {
+  readonly continuity: PostgresContinuityStore;
   readonly mediaSources: PostgresMediaSourceStore;
   readonly actions: PostgresActionStore;
   readonly nativeTools: PostgresNativeToolStore;
@@ -130,6 +136,7 @@ export class KaguyaDatabase {
   readonly modelRequestMetrics: ModelRequestMetricsRepository;
 
   constructor(readonly sql: SqlDatabase) {
+    this.continuity = new PostgresContinuityStore(sql);
     this.mediaSources = new PostgresMediaSourceStore(sql);
     this.actions = new PostgresActionStore(sql);
     this.nativeTools = new PostgresNativeToolStore(sql);
@@ -166,6 +173,7 @@ export class KaguyaDatabase {
     await prepareActionSchema(this.sql);
     await prepareNativeToolSchema(this.sql);
     await prepareNativeMemoryToolSchema(this.sql);
+    await prepareContinuitySchema(this.sql);
   }
 
   async close(): Promise<void> {

@@ -60,7 +60,7 @@ jobs:
           if-no-files-found: warn
       - name: Test capture persistence, transport, configuration and lifecycle
         run: >-
-          pnpm exec vitest run
+          pnpm exec vitest run --maxWorkers=1
           apps/server/src/napcat-capture.test.ts
           apps/server/src/napcat-capture-integration.test.ts
           apps/server/src/napcat.test.ts
