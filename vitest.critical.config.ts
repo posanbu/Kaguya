@@ -26,6 +26,7 @@ const criticalTests = [
   "packages/config/src/model.test.ts",
   "packages/config/src/manager.test.ts",
   "packages/config/src/module-config.test.ts",
+  "packages/config/src/continuity-migration.test.ts",
   "packages/config/src/startup-validation.test.ts",
   "packages/database/src/schema.test.ts",
   "packages/database/src/observation-store.test.ts",

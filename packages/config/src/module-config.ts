@@ -130,29 +130,41 @@ export async function loadModuleInstanceConfigs(options: {
 
   const result: ModuleInstanceConfig[] = [];
   for (const expectedConfig of options.defaults) {
-    const path = configPath(modulesRoot, expectedConfig.instanceId);
-    let value: unknown;
-    try {
-      value = await readSensitiveJson(path);
-    } catch (error) {
-      throw error instanceof ConfigError && error.code !== "CONFIG_IO_ERROR"
-        ? error
-        : corrupt("Module configuration is missing or unreadable", error);
-    }
-    const parsed = moduleInstanceConfigSchema.safeParse(value);
-    if (
-      !parsed.success ||
-      parsed.data.instanceId !== expectedConfig.instanceId ||
-      parsed.data.definitionId !== expectedConfig.definitionId
-    ) {
-      throw corrupt("Module configuration failed validation");
-    }
+    const stored = await readStoredModuleInstanceConfig(
+      modulesRoot,
+      expectedConfig,
+    );
     result.push({
-      ...parsed.data,
-      enabled: moduleEnabled(tree, parsed.data.instanceId),
+      ...stored,
+      enabled: moduleEnabled(tree, stored.instanceId),
     });
   }
   return [...result, ...additional];
+}
+
+/** Internal migration reader; keeps the normal loader's identity and file checks. */
+export async function readStoredModuleInstanceConfig(
+  modulesRoot: string,
+  expected: Pick<ModuleInstanceConfig, "instanceId" | "definitionId">,
+): Promise<StoredModuleInstanceConfig> {
+  const path = configPath(modulesRoot, expected.instanceId);
+  let value: unknown;
+  try {
+    value = await readSensitiveJson(path);
+  } catch (error) {
+    throw error instanceof ConfigError && error.code !== "CONFIG_IO_ERROR"
+      ? error
+      : corrupt("Module configuration is missing or unreadable", error);
+  }
+  const parsed = moduleInstanceConfigSchema.safeParse(value);
+  if (
+    !parsed.success ||
+    parsed.data.instanceId !== expected.instanceId ||
+    parsed.data.definitionId !== expected.definitionId
+  ) {
+    throw corrupt("Module configuration failed validation");
+  }
+  return parsed.data;
 }
 
 /** 替换已存在且身份固定的实例；调用方必须持有配置写锁并完成 schema 与 revision 校验。 */

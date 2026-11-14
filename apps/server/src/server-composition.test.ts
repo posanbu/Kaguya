@@ -635,6 +635,85 @@ describe("unified server composition", () => {
     20_000,
   );
 
+  it.each(["pre-continuity", "pre-lifecycle"])(
+    "starts with %s configuration and preserves existing settings across restart",
+    async (version) => {
+      const workspaceRoot = tempWorkspaceRoot();
+      const serverConfig = { ...config(workspaceRoot), port: 0 };
+      const rootDir = serverConfig.configRoot;
+      await FileUserConfigManager.bootstrap({ rootDir });
+      const defaults = createFirstPartyModuleConfigDefaults();
+      let previousDefaults = defaults.filter(
+        (item) => item.definitionId !== "agent.continuity",
+      );
+      if (version === "pre-lifecycle") {
+        previousDefaults = [
+          ...previousDefaults.filter(
+            (item) => item.definitionId !== "agent.lifecycle",
+          ),
+          {
+            version: 1,
+            instanceId: "attention-arousal.default",
+            definitionId: "agent.attention.arousal",
+            enabled: true,
+            settings: { idleSleepAfterMs: 240000 },
+          },
+          {
+            version: 1,
+            instanceId: "heartbeat.default",
+            definitionId: "agent.heartbeat.short",
+            enabled: true,
+            settings: { interruptQuietMs: 1500 },
+          },
+        ];
+      }
+      await loadModuleInstanceConfigs({ rootDir, defaults: previousDefaults });
+      const saved = configurationFiles(rootDir);
+      mkdirSync(serverConfig.webDistPath, { recursive: true });
+      writeFileSync(
+        join(serverConfig.webDistPath, "index.html"),
+        "<main>Kaguya</main>",
+      );
+      vi.spyOn(KaguyaDatabase, "connect").mockImplementation(async () =>
+        createTestingDatabase(),
+      );
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const server = await startKaguyaServer(serverConfig);
+        try {
+          expect((await server.app.inject("/healthz")).statusCode).toBe(200);
+          const configs = await loadModuleInstanceConfigs({
+            rootDir,
+            defaults,
+            initialize: false,
+          });
+          expect(
+            configs.find((item) => item.definitionId === "agent.continuity"),
+          ).toMatchObject({ enabled: false, settings: {} });
+          const current = configurationFiles(rootDir);
+          for (const [path, contents] of Object.entries(saved)) {
+            if (
+              path !== "cordis.yml" &&
+              !path.includes("attention-arousal.default") &&
+              !path.includes("heartbeat.default")
+            )
+              expect(current[path]).toEqual(contents);
+          }
+          if (version === "pre-lifecycle")
+            expect(
+              configs.find((item) => item.definitionId === "agent.lifecycle")!
+                .settings,
+            ).toMatchObject({
+              sleep: { idleSleepAfterMs: 240000 },
+              observation: { interruptQuietMs: 1500 },
+            });
+        } finally {
+          await server.close();
+        }
+      }
+    },
+    20_000,
+  );
+
   it.each([
     "missing tree",
     "missing modules",
