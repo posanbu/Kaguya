@@ -69,10 +69,10 @@ export async function collect(request, repo, triggerId) {
   }
   const selected = new Map(
     [
-      trigger,
       ...(await runs("pull_request")),
       ...(await runs("schedule")),
       ...(await runs("workflow_dispatch")),
+      trigger,
     ].map((run) => [run.id, run]),
   );
   const reports = [];
@@ -85,9 +85,41 @@ export async function collect(request, repo, triggerId) {
       jobs.push(...result.jobs);
       if (result.jobs.length < 100) break;
     }
-    reports.push(summarize(run, jobs));
+    const report = summarize(run, jobs);
+    report.artifactInventory = await inventoryArtifacts(request, repo, run);
+    reports.push(report);
   }
   return reports.sort((a, b) => b.id - a.id);
+}
+// Metadata only: never download or execute artifacts from a PR in this workflow.
+export async function inventoryArtifacts(request, repo, run) {
+  const items = [];
+  try {
+    for (let page = 1; ; page++) {
+      const result = await request(
+        `/repos/${repo}/actions/runs/${run.id}/artifacts?per_page=100&page=${page}`,
+      );
+      if (!Array.isArray(result.artifacts))
+        throw new Error("Invalid artifact list");
+      for (const item of result.artifacts) {
+        const attempt = /-attempt-(\d+)$/.exec(item.name);
+        items.push({
+          id: item.id,
+          name: item.name,
+          expired: item.expired,
+          sizeBytes: item.size_in_bytes,
+          createdAt: item.created_at,
+          expiresAt: item.expires_at,
+          attempt: attempt ? Number(attempt[1]) : null,
+        });
+      }
+      if (result.artifacts.length < 100) break;
+    }
+    return { status: "available", items };
+  } catch {
+    // Missing permissions or a failed page must not look like zero artifacts.
+    return { status: "unknown", items: [] };
+  }
 }
 const display = (value) => (value === null ? "未知" : value.toFixed(1));
 export function markdown(reports) {
@@ -104,6 +136,8 @@ export function markdown(reports) {
   const daily = reports.filter((run) => run.event === "schedule");
   const lines = [
     "# CI 耗时观测",
+    "",
+    "范围仅含 Test 工作流；从工作流运行创建时间开始计时。PR 创建至全部检查结束的时间，以及 NapCat、Linux tools 等独立检查，仍需另外核对。",
     "",
     `PR 首次尝试非取消样本 ${prs.length} 次，其中创建至完成超过 180 秒 ${over.length} 次，耗时未知 ${unknown.length} 次。`,
     `每日全量样本 ${daily.length} 次，通过 ${daily.filter((run) => run.conclusion === "success").length} 次。`,
@@ -131,6 +165,25 @@ export function markdown(reports) {
   lines.push("", "## 作业与步骤", "");
   for (const run of reports) {
     lines.push(`### ${run.id}`, "");
+    lines.push(
+      `提交：\`${run.sha ?? "未知"}\`；运行创建：${run.createdAt ?? "未知"}。`,
+      "",
+    );
+    const inventory = run.artifactInventory;
+    if (inventory?.status === "available") {
+      const current = inventory.items.filter(
+        (item) => item.attempt === run.attempt,
+      );
+      lines.push(
+        `当前 attempt 命名的产物 ${current.length} 个，可用 ${current.filter((item) => item.expired === false).length} 个；未标 attempt 的产物 ${inventory.items.filter((item) => item.attempt === null).length} 个。元数据不证明测试数量或报告内容完整。`,
+        "",
+      );
+      for (const item of inventory.items)
+        lines.push(
+          `- 产物 ${item.id}: ${item.name.replaceAll(/[\r\n|`]/g, " ")}, attempt ${item.attempt ?? "未知"}, ${item.expired === true ? "已过期" : item.expired === false ? "可下载" : "状态未知"}, ${item.sizeBytes ?? "未知"} bytes`,
+        );
+      lines.push("");
+    } else lines.push("产物清单未知（未采集或读取失败），不能推断未生成。", "");
     for (const job of run.jobs) {
       lines.push(`- ${job.name}: ${job.conclusion}, ${display(job.seconds)}s`);
       for (const step of job.steps)
