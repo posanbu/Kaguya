@@ -11,7 +11,12 @@ import {
   createNativeScriptedModel,
 } from "@kaguya/llm/testing";
 import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
-import { z } from "@kaguya/schema";
+import {
+  z,
+  freezeInformationAtom,
+  informationAtomSchema,
+  nativeMemorySnapshotSchema,
+} from "@kaguya/schema";
 import { nativeToolWireName } from "@kaguya/runtime";
 import { createMessageComposition } from "./index.js";
 import { createHash } from "node:crypto";
@@ -507,6 +512,56 @@ describe.each(backends)(
             limit: 1,
           })
         )[0]!;
+        if (request.payload.taskId === "memory.native.form") {
+          const input = JSON.parse(
+            (
+              request.payload.prompt as {
+                variables: { name: string; content: string }[];
+              }
+            ).variables.find((v) => v.name === "context")!.content,
+          );
+          const experience = nativeMemorySnapshotSchema
+            .parse(input.existing)
+            .recalled.map((r) => r.node)
+            .find((n) => n.metadata.activityReflection);
+          const source = z
+            .array(z.object({ id: z.string(), text: z.string() }))
+            .parse(input.sources)
+            .find((s) => s.text === "旧资料的章节标注有误");
+          if (!experience || !source)
+            return { text: JSON.stringify({ nodes: [], edges: [] }) };
+          return {
+            text: JSON.stringify({
+              nodes: [
+                {
+                  key: experience.id,
+                  kind: "experience",
+                  ownerId: "self:kaguya",
+                  scope,
+                  level: 1,
+                  content: experience.content,
+                  sourceIds: [...experience.metadata.sourceIds, source.id],
+                  tags: [],
+                  aliases: [],
+                  status: "active",
+                  activityReview: {
+                    experienceId: experience.id,
+                    perspective: "activity-appraisal",
+                    assessment: source.text,
+                    appliesTo: "本次阅读的旧资料",
+                    counterexampleIds: [source.id],
+                  },
+                },
+              ],
+              edges: [],
+              experienceOperation: {
+                kind: "correct",
+                inputIds: [experience.id],
+                outputIds: [experience.id],
+              },
+            }),
+          };
+        }
         if (request.payload.taskId === "agent.continuity.appraise")
           return {
             text: JSON.stringify({
@@ -633,35 +688,79 @@ describe.each(backends)(
           { timeout: 8000 },
         );
         const assessment = "旧资料的章节标注有误";
-        await db.memoryGraph.native.publish({
-          operationId: "curator-corrects-activity",
-          actor: "manual",
-          nodes: [
-            {
-              expectedRevision: experience.metadata.revision,
-              node: {
-                ...experience,
+        const correctionId = randomUUID(),
+          occurredAt = new Date().toISOString();
+        const source = {
+          platform: "kaguya",
+          adapterId: "internal",
+          senderId: "reader",
+          selfId: "kaguya",
+          destination: {
+            kind: "web",
+            conversationId: "00000000-0000-4000-8000-000000000001",
+          },
+        };
+        const contextId = (await db.continuity.read("kaguya", scope))!
+          .contextInformationId;
+        const append = (
+          informationId: string,
+          kind: string,
+          payload: Record<string, unknown>,
+        ) =>
+          db.information.append(
+            freezeInformationAtom(
+              informationAtomSchema.parse({
+                informationId,
+                kind,
+                payload,
+                occurredAt,
+                source: "test:activity-reflection",
+                references: [
+                  { relation: "core:context", informationId: contextId },
+                ],
+              }),
+            ),
+            [{ relation: "core:context", required: true, multiple: false }],
+          );
+        await append(correctionId, "core.message.inbound.text", {
+          text: assessment,
+          source,
+        });
+        await db.memoryGraph.native.ingest({
+          id: correctionId,
+          scope,
+          ownerId: `conversation:${scope}`,
+          text: assessment,
+          occurredAt,
+          collectedAt: occurredAt,
+          sourceType: "inbound",
+          participants: [],
+          replyTo: null,
+        });
+        await append(randomUUID(), "memory.native.formation.retry.v1", {
+          batchId: randomUUID(),
+          scope,
+        });
+        await vi.waitFor(
+          async () =>
+            expect(
+              await db.memoryGraph.native.current(
+                { ...read, asOf: new Date().toISOString() },
+                [experience.id],
+              ),
+            ).toMatchObject([
+              {
                 metadata: {
-                  ...experience.metadata,
                   revision: experience.metadata.revision + 1,
                   activityReview: {
-                    experienceId: experience.id,
-                    perspective: "activity-appraisal",
                     assessment,
-                    appliesTo: "本次阅读的旧资料",
-                    counterexampleIds: [],
+                    counterexampleIds: [correctionId],
                   },
                 },
               },
-            },
-          ],
-          edges: [],
-          experienceOperation: {
-            kind: "correct",
-            inputIds: [experience.id],
-            outputIds: [experience.id],
-          },
-        });
+            ]),
+          { timeout: 8000 },
+        );
         const seed = (
           await db.memoryGraph.native.readFixed({
             scope: "shared",
