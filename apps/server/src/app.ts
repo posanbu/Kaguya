@@ -683,6 +683,71 @@ export async function createHttpApplication(
     },
   });
 
+  app.addHook("onRequest", (request, _reply, done) => {
+    runWithLogContext({ requestId: request.id }, done);
+  });
+
+  await app.register(cors, {
+    origin:
+      options.config.corsOrigins.length === 0
+        ? false
+        : [...options.config.corsOrigins],
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["authorization", "content-type", "x-request-id"],
+  });
+  // Match registered routes, not raw URLs: query strings and resource IDs cannot
+  // create new quotas. HEAD shares GET's budget; writes always use the normal one.
+  const pollingBucket = (request: FastifyRequest): string | undefined => {
+    if (
+      !hasValidGatewayToken(request, options.config.gatewayToken) ||
+      (request.method !== "GET" && request.method !== "HEAD")
+    )
+      return undefined;
+    const route = request.routeOptions.url;
+    if (route?.startsWith("/api/v1/inspection/")) return "inspection";
+    if (route === "/api/v1/configuration/status") return "configuration-status";
+    if (route === "/api/v1/adapters/status") return "adapter-status";
+    if (route === "/api/v1/messages") return "messages";
+    return undefined;
+  };
+  await app.register(rateLimit, {
+    global: false,
+    max: (request) =>
+      pollingBucket(request) ? 120 : options.config.rateLimitMax,
+    timeWindow: (request) =>
+      pollingBucket(request) ? 60_000 : options.config.rateLimitWindowMs,
+    keyGenerator: (request) => {
+      const authenticated = hasValidGatewayToken(
+        request,
+        options.config.gatewayToken,
+      );
+      return `${authenticated ? "authenticated" : "unauthenticated"}:${pollingBucket(request) ?? "general"}:${request.ip}`;
+    },
+  });
+  // An application hook runs before route authentication, so rejected credentials
+  // consume the anonymous quota too. Only explicit public exemptions skip it.
+  const enforceRateLimit = app.rateLimit();
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.routeOptions.config.rateLimit !== false)
+      await enforceRateLimit.call(app, request, reply);
+  });
+  await app.register(swagger, {
+    openapi: {
+      info: {
+        title: "Kaguya Application API",
+        version: "1.0.0",
+      },
+      components: {
+        securitySchemes: {
+          bearerAuth: {
+            type: "http",
+            scheme: "bearer",
+          },
+        },
+      },
+    },
+  });
+
   registerModuleTemplateRoutes(
     app,
     requireGatewayToken(options, "management"),
@@ -703,42 +768,6 @@ export async function createHttpApplication(
     requireGatewayToken(options, "management"),
     options.moduleSettings,
   );
-
-  app.addHook("onRequest", (request, _reply, done) => {
-    runWithLogContext({ requestId: request.id }, done);
-  });
-
-  await app.register(cors, {
-    origin:
-      options.config.corsOrigins.length === 0
-        ? false
-        : [...options.config.corsOrigins],
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["authorization", "content-type", "x-request-id"],
-  });
-  await app.register(rateLimit, {
-    global: true,
-    max: options.config.rateLimitMax,
-    timeWindow: options.config.rateLimitWindowMs,
-    keyGenerator: (request) =>
-      `${hasValidGatewayToken(request, options.config.gatewayToken) ? "authenticated" : "unauthenticated"}:${request.ip}`,
-  });
-  await app.register(swagger, {
-    openapi: {
-      info: {
-        title: "Kaguya Application API",
-        version: "1.0.0",
-      },
-      components: {
-        securitySchemes: {
-          bearerAuth: {
-            type: "http",
-            scheme: "bearer",
-          },
-        },
-      },
-    },
-  });
 
   registerMessageTargetRoutes(
     app,
@@ -888,14 +917,6 @@ export async function createHttpApplication(
   app.get(
     "/api/v1/adapters/status",
     {
-      config: {
-        rateLimit: {
-          max: 120,
-          timeWindow: 60_000,
-          keyGenerator: (request: FastifyRequest) =>
-            `adapter-status:${request.ip}`,
-        },
-      },
       onRequest: requireGatewayToken(options, "management"),
       schema: {
         tags: ["Adapters"],
@@ -1288,8 +1309,6 @@ export async function createHttpApplication(
         },
         requireGatewayToken(options, "messages"),
       ],
-      // 私聊增量同步使用独立预算，避免正常轮询耗尽普通发送/管理请求额度。
-      config: { rateLimit: { max: 120, timeWindow: 60_000 } },
       schema: {
         tags: ["Messages"],
         summary: "Read persisted messages from one Web conversation",

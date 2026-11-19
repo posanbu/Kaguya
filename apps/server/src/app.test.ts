@@ -38,6 +38,7 @@ import {
 } from "@kaguya/logger";
 import { createFirstPartyModuleConfigDefaults } from "@kaguya/modules";
 import { createHttpApplication } from "./app.js";
+import { createInspectionService } from "./inspection.js";
 import type { ServerConfig } from "./config.js";
 import {
   createConfigurationManagement,
@@ -1319,6 +1320,206 @@ describe("application API gateway", () => {
     expect(spoofedSecondClient.statusCode).toBe(429);
     await untrustedApp.close();
   });
+});
+
+describe("polling and management rate limits (#318)", () => {
+  it("supports two polling windows interleaved with management requests", async () => {
+    const app = await createHttpApplication({
+      config,
+      webGateway: fakeGateway(),
+      inspection: createInspectionService({
+        modules: () => [],
+        secrets: {},
+        ledger: { get: async () => undefined, inspectPage: async () => [] },
+      }),
+      configurationApplication: {
+        status: async () => ({
+          state: "ready",
+          selectedProfileId: "test",
+          selectedRevision: "a".repeat(64),
+          appliedProfileId: "test",
+          appliedRevision: "a".repeat(64),
+        }),
+        apply: async () => {
+          throw new Error("Not used by polling fixture");
+        },
+      },
+    });
+    await app.ready();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    try {
+      for (let second = 0; second < 120; second++) {
+        vi.setSystemTime(start + second * 1000);
+        for (const [period, url] of [
+          [3, "/api/v1/inspection/situation"],
+          [5, "/api/v1/configuration/status"],
+        ] as const) {
+          if (second % period !== 0) continue;
+          const response = await app.inject({ url, headers: authorization() });
+          expect(response.statusCode, `${second}s ${url}`).toBe(200);
+        }
+        if (second % 10 === 0) {
+          const response = await app.inject({
+            method: "POST",
+            url: "/api/v1/messages",
+            headers: authorization(),
+            payload: requestBody,
+          });
+          expect(response.statusCode).toBe(202);
+        }
+      }
+    } finally {
+      vi.useRealTimers();
+      await app.close();
+    }
+  });
+
+  it("bounds polling across inspection routes without consuming write quotas", async () => {
+    const app = await createApiGateway({
+      config: { ...config, rateLimitMax: 1 },
+      webGateway: fakeGateway(),
+    });
+    await app.ready();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    try {
+      for (let i = 0; i < 120; i++) {
+        const response = await app.inject({
+          url:
+            i % 2
+              ? "/api/v1/inspection/modules"
+              : "/api/v1/inspection/situation?ignored=1",
+          headers: authorization(),
+        });
+        expect(response.statusCode).toBe(503);
+      }
+      const exceeded = await app.inject({
+        url: "/api/v1/inspection/situation",
+        headers: authorization(),
+      });
+      expect(exceeded.statusCode).toBe(429);
+      expect(Number(exceeded.headers["retry-after"])).toBeGreaterThan(0);
+      expect(
+        (
+          await app.inject({
+            method: "HEAD",
+            url: "/api/v1/inspection/modules",
+            headers: authorization(),
+          })
+        ).statusCode,
+      ).toBe(429);
+      expect(
+        (
+          await app.inject({
+            url: "/api/v1/configuration/status",
+            headers: authorization(),
+          })
+        ).statusCode,
+      ).toBe(503);
+      for (const expected of [202, 429]) {
+        expect(
+          (
+            await app.inject({
+              method: "POST",
+              url: "/api/v1/messages",
+              headers: authorization(),
+              payload: requestBody,
+            })
+          ).statusCode,
+        ).toBe(expected);
+      }
+      vi.setSystemTime(start + 60_000);
+      expect(
+        (
+          await app.inject({
+            url: "/api/v1/inspection/situation",
+            headers: authorization(),
+          })
+        ).statusCode,
+      ).toBe(503);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/v1/messages",
+            headers: authorization(),
+            payload: requestBody,
+          })
+        ).statusCode,
+      ).toBe(202);
+    } finally {
+      vi.useRealTimers();
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["PUT", "/api/v1/modules/example/templates/default"],
+    ["PUT", "/api/v1/identity/persona-template"],
+    ["POST", "/api/v1/memory/publications"],
+    ["PUT", "/api/v1/modules/example/instances/default/settings"],
+  ] as const)(
+    "includes authenticated %s %s in the shared write quota",
+    async (method, url) => {
+      const app = await createApiGateway({
+        config: { ...config, rateLimitMax: 1 },
+        webGateway: fakeGateway(),
+      });
+      try {
+        expect(
+          (await app.inject({ method, url, headers: authorization() }))
+            .statusCode,
+        ).toBe(503);
+        expect(
+          (
+            await app.inject({
+              method: "POST",
+              url: "/api/v1/messages",
+              headers: authorization(),
+              payload: requestBody,
+            })
+          ).statusCode,
+        ).toBe(429);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  it.each([
+    ["GET", "/api/v1/inspection/situation"],
+    ["GET", "/api/v1/configuration/status"],
+    ["PUT", "/api/v1/modules/example/templates/default"],
+    ["PUT", "/api/v1/identity/persona-template"],
+    ["GET", "/api/v1/memory/graph"],
+    ["PUT", "/api/v1/modules/example/instances/default/settings"],
+  ] as const)(
+    "limits unauthenticated %s %s before route authentication",
+    async (method, url) => {
+      const app = await createApiGateway({
+        config: { ...config, rateLimitMax: 1 },
+      });
+      try {
+        expect((await app.inject({ method, url })).statusCode).toBe(401);
+        expect(
+          (
+            await app.inject({
+              method,
+              url,
+              headers: { authorization: "Bearer invalid-test-only-token" },
+            })
+          ).statusCode,
+        ).toBe(429);
+        expect((await app.inject({ url: "/healthz" })).statusCode).toBe(200);
+        expect(
+          (await app.inject({ url: "/api/v1/openapi.json" })).statusCode,
+        ).toBe(200);
+      } finally {
+        await app.close();
+      }
+    },
+  );
 });
 
 function fakeGateway(): WebMessageGateway {

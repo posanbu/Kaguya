@@ -91,7 +91,11 @@ Authorization: Bearer replace-with-at-least-16-characters
 
 :::
 
-认证发生在业务 schema 校验之前。认证和未认证请求使用不同限流 key，避免未认证流量消耗已认证配额。
+限流发生在路由认证之前，认证发生在业务 schema 校验之前。按客户端 IP 分开计算已认证和未认证额度；无效凭据也消耗未认证额度。
+
+普通读取和所有写请求共用 Profile 中的 `rateLimitMax` / `rateLimitWindowMs`（默认每 60 秒 30 次）。已认证的轮询读取分为四组：全部 `/api/v1/inspection/*`、`/api/v1/configuration/status`、`/api/v1/adapters/status`、`GET /api/v1/messages`，每组每个 IP 独立允许每 60 秒 120 次。对应 HEAD 请求计入同组；查询参数和资源 ID 不增加额度。未认证请求统一使用普通额度，不获得轮询额度。
+
+`/healthz` 和 `/api/v1/openapi.json` 显式豁免。超额返回 `429 rate_limited` 与 `Retry-After`；客户端应等待后重试。当前额度保存在服务进程内，重启会重置，多实例分别计数。
 
 Server 每次启动生成一个新的全权限 token，成功监听后通过 `Kaguya access URL` 的 `#gatewayToken=` fragment 输出。该 token 同时授权 management 和 messages 范围；重启后旧 token 返回 `401 unauthorized`。
 
