@@ -40,8 +40,8 @@ describe.each(backends)(
   "continuous production composition $name",
   ({ create }) => {
     it("records acceptance before replying, links actual delivery and requires feedback from the original requester", async () => {
-      // 共用原 15 秒整例上限，为关闭预留 1 秒，避免阶段上限先于整例到期。
-      const deadline = performance.now() + 14_000;
+      // The three turns and publication of the feedback experience share one deadline.
+      const deadline = performance.now() + 29_000;
       const waitForCheckpoint = (check: () => void | Promise<void>) =>
         vi.waitFor(check, {
           timeout: Math.max(1, deadline - performance.now()),
@@ -200,6 +200,28 @@ describe.each(backends)(
               ?.fulfillment,
           ).toBe("fulfilled"),
         );
+        const confirmed = (await db.continuity.read(
+          "kaguya",
+          scope,
+        ))!.activities.find((activity) => activity.id === a.id)!;
+        expect(confirmed.feedbackIds).toHaveLength(1);
+        await waitForCheckpoint(async () => {
+          const records = await db.memoryGraph.native.forFormation({
+            scope,
+            owners: ["self:kaguya"],
+            asOf: new Date().toISOString(),
+            query: "",
+          });
+          const experiences = records.filter(
+            (n) => n.metadata.activityReflection?.activityId === a.id,
+          );
+          expect(experiences).toHaveLength(1);
+          expect(experiences[0]!.metadata.activityReflection).toMatchObject({
+            fulfillment: "fulfilled",
+            deliveryIds: confirmed.deliveryIds,
+            feedbackIds: confirmed.feedbackIds,
+          });
+        });
         expect((await db.continuity.read("kaguya", scope))?.budget.used).toBe(
           0,
         );
@@ -214,7 +236,7 @@ describe.each(backends)(
         await db.close();
         failureSpy.mockRestore();
       }
-    });
+    }, 30_000);
     it.each([true, false])(
       "requires actual source, saved note and read-back proof (source reported: %s)",
       async (hasSource) => {
