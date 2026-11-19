@@ -260,6 +260,62 @@ export function ContinuityPanel({
                     </>
                   )}
                 </dl>
+                {a.memoryDependencies.some((d) => d.reflection) && (
+                  <details>
+                    <summary>本次选择读取的活动经历</summary>
+                    {a.choiceEvidence && (
+                      <div>
+                        <p>选择理由 · {a.choiceEvidence.reason}</p>
+                        <button
+                          className="inspection-link"
+                          onClick={() => select(a.choiceEvidence!.inputId)}
+                        >
+                          查看冻结输入
+                        </button>
+                        <button
+                          className="inspection-link"
+                          onClick={() => select(a.choiceEvidence!.decisionId)}
+                        >
+                          查看原始选择
+                        </button>
+                      </div>
+                    )}
+                    {a.memoryDependencies.map(
+                      (d) =>
+                        d.reflection && (
+                          <div key={d.id}>
+                            <p>
+                              记忆版本 {d.revision}
+                              {d.reflection.result &&
+                                ` · ${{ verified: "已核实", partial: "部分完成", failed: "失败", unknown: "结果未知" }[d.reflection.result]}`}
+                            </p>
+                            {d.reflection.assessment && (
+                              <p>
+                                {d.reflection.assessment}（
+                                {d.reflection.appliesTo}）
+                              </p>
+                            )}
+                            {[
+                              ...new Set([
+                                ...(d.reflection.activityInformationId
+                                  ? [d.reflection.activityInformationId]
+                                  : []),
+                                ...d.reflection.sourceIds,
+                              ]),
+                            ].map((id, i) => (
+                              <button
+                                className="inspection-link"
+                                key={id}
+                                onClick={() => select(id)}
+                              >
+                                查看依据 {i + 1}
+                              </button>
+                            ))}
+                          </div>
+                        ),
+                    )}
+                  </details>
+                )}
                 {a.completedSteps.length > 0 && (
                   <details>
                     <summary>已完成步骤与产物</summary>

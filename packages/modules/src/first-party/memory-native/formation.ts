@@ -6,7 +6,8 @@
  */
 import { createHash } from "node:crypto";
 import type { NativeMemoryAccess, NativeMemorySnapshot } from "@kaguya/memory";
-import { z } from "@kaguya/schema";
+import { validActivityReview } from "./activity-review.js";
+import { activityReviewSchema, z } from "@kaguya/schema";
 import {
   experienceFormationOutputSchema,
   formationSchemaFor,
@@ -43,9 +44,11 @@ export async function publishFormation(
     reason = "model-unavailable";
   let nodeIds: string[] = [];
   if (result.status === "completed") {
-    const parsed = formationSchemaFor(p.existing, p.formationPolicy).safeParse(
-      result.output,
-    );
+    const parsed = formationSchemaFor(
+      p.existing,
+      p.formationPolicy,
+      p.activityReviewIntervalMs,
+    ).safeParse(result.output);
     if (parsed.success) {
       const existing = new Map(
         [...p.existing.fixed, ...p.existing.recalled.map((r) => r.node)].map(
@@ -58,17 +61,49 @@ export async function publishFormation(
       ]);
       const allowedOwners = new Set(p.existing.owners);
       const nodes = parsed.data.nodes.map((n) => {
-        const previous = existing.get(n.key);
+        const review =
+          "activityReview" in n
+            ? activityReviewSchema.parse(n.activityReview)
+            : undefined;
+        const id =
+          review && review.perspective !== "activity-appraisal"
+            ? stableId(
+                "activity-review.v1",
+                JSON.stringify([
+                  p.scope,
+                  review.experienceId,
+                  review.perspective,
+                  n.ownerId,
+                ]),
+              )
+            : n.key;
+        const previous = existing.get(id);
         const revision = (previous?.metadata.revision ?? 0) + 1;
         const { key: _key, content, ...metadata } = n;
         return {
           expectedRevision: revision - 1,
           node: {
-            id: previous?.id ?? stableId(p.batchId, n.key),
-            content,
+            id:
+              previous?.id ??
+              (review && review.perspective !== "activity-appraisal"
+                ? id
+                : stableId(p.batchId, n.key)),
+            content: review
+              ? previous?.metadata.activityReflection
+                ? previous.content
+                : review.assessment
+              : content,
             metadata: {
               ...previous?.metadata,
               ...metadata,
+              ...(review ? { activityReview: review } : {}),
+              sourceIds: [
+                ...new Set(
+                  previous?.metadata.activityReflection
+                    ? [previous.metadata.sourceIds[0]!, ...n.sourceIds]
+                    : n.sourceIds,
+                ),
+              ],
               system: "native-v1" as const,
               occurredAt: occurredAt,
               revision,
@@ -253,6 +288,13 @@ export async function publishFormation(
         ) &&
         nodes.every(
           ({ node: n }) =>
+            validActivityReview(
+              n,
+              existing,
+              p,
+              occurredAt,
+              experienceOperation,
+            ) &&
             validEvidence(n) &&
             allowedOwners.has(n.metadata.ownerId) &&
             (!existing.has(n.id) ||

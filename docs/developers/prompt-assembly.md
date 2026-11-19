@@ -130,6 +130,8 @@ LLM 客户端接受文本 `prompt` 或结构化 `messages`，两者互斥。Heav
 
 ::: code-group
 
+冻结输入中有活动经历时，装配器增加活动评价、经历整理和较慢自我修订三组说明，以及当时生效的整理间隔。活动评价保留个人判读和原因假设，更正输出接受 `activityReview`，宿主仍负责验证当前作用域、反例来源、独立观察时间和版本。既有冻结请求按原输出契约解析。合成阅读与勘误的实际渲染样例由 `packages/modules/src/first-party/memory-native/formation-prompt.test.ts` 快照保存。
+
 <<< ../../packages/modules/templates/memory.native.form.default.hbs [记忆形成与整理 ~~vscode-icons:file-type-handlebars~~]
 
 :::

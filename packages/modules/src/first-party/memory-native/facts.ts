@@ -4,7 +4,7 @@
  * 代码库关系：模块生产事实，database 核验其原始来源、冻结输入与完成依据；schema 本身无 I/O。
  */
 import { memorySourceSchema } from "@kaguya/memory";
-import { personEvidenceSchema, z } from "@kaguya/schema";
+import { activityReviewSchema, personEvidenceSchema, z } from "@kaguya/schema";
 import { defineInformationKind } from "@kaguya/sdk";
 export const nativeMemoryRequested = defineInformationKind({
   kind: "memory.native.formation.requested.v1",
@@ -15,6 +15,7 @@ export const nativeMemoryRequested = defineInformationKind({
       batchId: z.string(),
       scope: z.string(),
       formationPolicy: z.literal("experience-operations.v1").exactOptional(),
+      activityReviewIntervalMs: z.number().int().positive().exactOptional(),
       sources: z.array(memorySourceSchema),
       existing: z.record(z.string(), z.json()),
     })
@@ -168,11 +169,24 @@ export const experienceFormationOutputSchema =
       .optional(),
   });
 
+export const activityFormationOutputSchema =
+  experienceFormationOutputSchema.extend({
+    nodes: z
+      .array(
+        revisableFormationOutputSchema.shape.nodes.element.extend({
+          activityReview: activityReviewSchema.optional(),
+        }),
+      )
+      .max(24),
+  });
+
 /** 以持久冻结字段选择协议；旧 v1 请求永远保持原模型输出 schema。 */
 export function formationSchemaFor(
   existing: { cutoff?: unknown },
   formationPolicy?: "experience-operations.v1",
+  reviewInterval?: number,
 ) {
+  if (reviewInterval !== undefined) return activityFormationOutputSchema;
   if (formationPolicy) return experienceFormationOutputSchema;
   return existing.cutoff
     ? revisableFormationOutputSchema

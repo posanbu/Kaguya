@@ -57,9 +57,10 @@ export function createNativeMemoryModule(
   },
 ) {
   const render = createFormationPromptRenderer(options.nativeMemoryTemplate);
-  async function request(
+  async function registerRequest(
     batch: MemoryBatch,
     context: InformationModuleHandlerContext,
+    reviewInterval: number,
     contextInformationId?: string,
   ) {
     const owners = [
@@ -92,6 +93,11 @@ export function createNativeMemoryModule(
           batchId: batch.id,
           scope: batch.scope,
           formationPolicy: "experience-operations.v1",
+          ...([...existing.fixed, ...existing.recalled.map((r) => r.node)].some(
+            (n) => n.metadata.activityReflection || n.metadata.activityReview,
+          )
+            ? { activityReviewIntervalMs: reviewInterval }
+            : {}),
           sources: batch.sources.map((s) => ({ ...s })),
           existing,
         },
@@ -102,6 +108,7 @@ export function createNativeMemoryModule(
       },
     );
   }
+
   return defineInformationModule({
     manifest: {
       category: "memory",
@@ -146,7 +153,18 @@ export function createNativeMemoryModule(
       ],
       provides: [],
     },
-    create: ({ activation }) => {
+    create: ({ activation, settings }) => {
+      const request = (
+        batch: MemoryBatch,
+        context: InformationModuleHandlerContext,
+        contextInformationId?: string,
+      ) =>
+        registerRequest(
+          batch,
+          context,
+          settings.activityReviewIntervalMs,
+          contextInformationId,
+        );
       let maintenance = Promise.resolve();
       return {
         provisions: [],
@@ -465,6 +483,7 @@ export function createNativeMemoryModule(
                       outputSchema: formationSchemaFor(
                         p.existing,
                         p.formationPolicy,
+                        p.activityReviewIntervalMs,
                       ),
                       allowedTiers: ["light"],
                     },

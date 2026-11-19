@@ -250,6 +250,8 @@ describe.each(backends)(
             text: JSON.stringify({
               status: "complete",
               summary: "已读取资料并保存、回读笔记",
+              appraisal: "笔记需要逐句核对",
+              causeHypothesis: "可能混用了不同章节",
               nextStep: "可继续阅读",
               completedSteps: ["读取原始资料", "保存笔记", "回读指纹一致"],
               checkAfterMs: 3600000,
@@ -422,13 +424,63 @@ describe.each(backends)(
                   asOf: new Date().toISOString(),
                   query: "",
                 })
-              ).some(
-                (n) =>
-                  n.metadata.kind === "experience" &&
-                  n.metadata.sourceIds.length > 0,
-              ),
-            ).toBe(true),
+              )
+                .filter((n) => n.metadata.activityReflection)
+                .map((n) => n.metadata.activityReflection),
+            ).toEqual([
+              expect.objectContaining({
+                activityId: view.activities[0]!.id,
+                expectation: "读取资料并保存笔记",
+                result: hasSource ? "verified" : "unknown",
+                receiptIds: expect.arrayContaining([
+                  note.actionReceiptId,
+                  verified.actionReceiptId,
+                ]),
+                reportedSteps: ["读取原始资料", "保存笔记", "回读指纹一致"],
+                appraisal: "笔记需要逐句核对",
+                causeHypothesis: "可能混用了不同章节",
+              }),
+            ]),
           );
+          const read = {
+            scope,
+            owners: ["self:kaguya"],
+            asOf: new Date().toISOString(),
+            query: "读书",
+          };
+          const experience = (
+            await db.memoryGraph.native.forFormation(read)
+          ).find(
+            (n) =>
+              n.metadata.activityReflection?.activityId ===
+              view.activities[0]!.id,
+          )!;
+          const cutoff = await db.memoryGraph.native.cutoff(read);
+          await db.memoryGraph.native.publish({
+            operationId: "withdraw-note-receipt",
+            actor: "manual",
+            nodes: [],
+            invalidations: [
+              {
+                kind: "source-withdrawal",
+                targetId: note.actionReceiptId,
+                reason: "原笔记回执撤回",
+              },
+            ],
+          });
+          expect(
+            await db.memoryGraph.native.current(read, [experience.id]),
+          ).toEqual([]);
+          expect(
+            await db.memoryGraph.native.current({ ...read, cutoff }, [
+              experience.id,
+            ]),
+          ).toMatchObject([
+            {
+              id: experience.id,
+              metadata: { revision: experience.metadata.revision },
+            },
+          ]);
           expect(
             await db.information.find({
               kinds: ["consumer.failed"],
@@ -464,12 +516,16 @@ describe.each(backends)(
             }),
           };
         const a = (await db.continuity.read("kaguya", scope))?.activities[0];
+        const prompt = request.payload.prompt as { text: string };
+        const corrected = prompt.text.includes("旧资料的章节标注有误");
         return {
           text: JSON.stringify({
             action: a ? "continue" : "create",
             activityId: a?.id ?? null,
             title: "选择公开资料",
-            goal: a ? "按更正的偏好阅读建筑资料" : "按原偏好阅读月球资料",
+            goal: corrected
+              ? "按更正的偏好阅读建筑资料"
+              : "按原偏好阅读月球资料",
             nextStep: a ? "选择建筑资料" : "选择月球资料",
             reason: a ? "已核对当前 Memory 的偏好更正" : "按当前兴趣选择",
             checkAfterMs: 86400000,
@@ -556,6 +612,56 @@ describe.each(backends)(
         );
         const original = (await db.continuity.read("kaguya", scope))!
           .activities[0]!;
+        const read = {
+          scope,
+          owners: ["self:kaguya"],
+          query: "",
+          asOf: new Date().toISOString(),
+        };
+        const experience = await vi.waitFor(
+          async () => {
+            const nodes = await db.memoryGraph.native.forFormation({
+              ...read,
+              asOf: new Date().toISOString(),
+            });
+            const node = nodes.find(
+              (n) => n.metadata.activityReflection?.activityId === original.id,
+            );
+            expect(node).toBeDefined();
+            return node!;
+          },
+          { timeout: 8000 },
+        );
+        const assessment = "旧资料的章节标注有误";
+        await db.memoryGraph.native.publish({
+          operationId: "curator-corrects-activity",
+          actor: "manual",
+          nodes: [
+            {
+              expectedRevision: experience.metadata.revision,
+              node: {
+                ...experience,
+                metadata: {
+                  ...experience.metadata,
+                  revision: experience.metadata.revision + 1,
+                  activityReview: {
+                    experienceId: experience.id,
+                    perspective: "activity-appraisal",
+                    assessment,
+                    appliesTo: "本次阅读的旧资料",
+                    counterexampleIds: [],
+                  },
+                },
+              },
+            },
+          ],
+          edges: [],
+          experienceOperation: {
+            kind: "correct",
+            inputIds: [experience.id],
+            outputIds: [experience.id],
+          },
+        });
         const seed = (
           await db.memoryGraph.native.readFixed({
             scope: "shared",
@@ -596,6 +702,33 @@ describe.each(backends)(
         );
         const revised = (await db.continuity.read("kaguya", scope))!
           .activities[0]!;
+        expect(revised.choiceEvidence?.reason).toBe(
+          "已核对当前 Memory 的偏好更正",
+        );
+        expect(revised.memoryDependencies).toContainEqual(
+          expect.objectContaining({
+            id: experience.id,
+            revision: experience.metadata.revision + 1,
+            reflection: expect.objectContaining({
+              assessment,
+              result: "unknown",
+            }),
+          }),
+        );
+        const requests = (
+          await db.information.find({
+            kinds: ["core.model.task.requested"],
+            registrationOrder: true,
+            order: "asc",
+            limit: 100,
+          })
+        ).filter((r) => r.payload.taskId === "agent.continuity.choose");
+        expect(
+          (requests[0]!.payload.prompt as { text: string }).text,
+        ).not.toContain(assessment);
+        expect(
+          (requests.at(-1)!.payload.prompt as { text: string }).text,
+        ).toContain(assessment);
         expect(revised.memoryDependencies).toContainEqual({
           id: seed.id,
           revision: seed.metadata.revision + 1,
@@ -615,7 +748,7 @@ describe.each(backends)(
         await runtime.close();
         await db.close();
       }
-    });
+    }, 30_000);
     it("reconciles the original unknown write after restart without submitting it again", async () => {
       const db = await create();
       const scope =

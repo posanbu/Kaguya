@@ -1,6 +1,10 @@
 /** 跨服务端、模块和管理界面共用持续状态、活动与来源协议。 */
 import { z } from "zod";
-import { nativeMemoryNodeSchema } from "./memory-graph.js";
+import {
+  activityReflectionSchema,
+  nativeMemoryNodeSchema,
+  type NativeMemoryNode,
+} from "./memory-graph.js";
 const id = z.string().min(1).max(1000);
 const instant = z.iso.datetime();
 export const continuityPolicySchema = z
@@ -42,6 +46,25 @@ export const currentStateSchema = z
   })
   .strict();
 export type CurrentState = z.infer<typeof currentStateSchema>;
+/** Keep the exact reflection and evidence references that the choice actually read. */
+export function activityMemoryDependency(n: NativeMemoryNode) {
+  return {
+    id: n.id,
+    revision: n.metadata.revision,
+    ...(n.metadata.activityReflection || n.metadata.activityReview
+      ? {
+          reflection: {
+            sourceIds: n.metadata.sourceIds,
+            activityInformationId:
+              n.metadata.activityReflection?.activityInformationId ?? null,
+            assessment: n.metadata.activityReview?.assessment ?? null,
+            appliesTo: n.metadata.activityReview?.appliesTo ?? null,
+            result: n.metadata.activityReflection?.result ?? null,
+          },
+        }
+      : {}),
+  };
+}
 export const activitySchema = z
   .object({
     id,
@@ -70,8 +93,31 @@ export const activitySchema = z
     checkpointReceiptIds: z.array(id).max(128),
     artifacts: z.array(id).max(100),
     sources: z.array(id).min(1).max(100),
+    choiceEvidence: z
+      .object({ inputId: id, decisionId: id, reason: z.string().max(2000) })
+      .strict()
+      .exactOptional(),
     memoryDependencies: z
-      .array(z.object({ id, revision: z.number().int().positive() }).strict())
+      .array(
+        z
+          .object({
+            id,
+            revision: z.number().int().positive(),
+            reflection: z
+              .object({
+                sourceIds: z.array(id),
+                activityInformationId: id.nullable(),
+                assessment: z.string().nullable(),
+                appliesTo: z.string().nullable(),
+                result: z
+                  .enum(["unknown", "partial", "verified", "failed"])
+                  .nullable(),
+              })
+              .strict()
+              .exactOptional(),
+          })
+          .strict(),
+      )
       .max(100),
     personIds: z.array(id).max(20),
     acceptedBy: id.nullable(),
@@ -161,6 +207,7 @@ export const internalSourceSchema = z
     basis: z.array(id).min(1).max(100),
     occurredAt: instant,
     relatedPersonIds: z.array(id).max(20).optional(),
+    activityReflection: activityReflectionSchema.exactOptional(),
   })
   .strict();
 export type InternalSource = z.infer<typeof internalSourceSchema>;

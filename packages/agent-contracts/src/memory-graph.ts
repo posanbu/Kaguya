@@ -128,6 +128,49 @@ export const personEvidenceSchema = z
     "Invalid evidence interval",
   );
 
+/** 客观字段取自冻结活动和宿主回执。主观说明保留模型归属。 */
+export const activityReflectionSchema = z
+  .object({
+    activityId: nonBlank,
+    activityRevision: z.number().int().positive(),
+    activityInformationId: nonBlank,
+    expectation: nonBlank,
+    reportedSteps: z.array(z.string()).max(100),
+    receiptIds: z.array(nonBlank),
+    artifactIds: z.array(nonBlank),
+    feedbackIds: z.array(nonBlank),
+    deliveryIds: z.array(nonBlank),
+    state: z.enum([
+      "candidate",
+      "active",
+      "waiting",
+      "paused",
+      "completed",
+      "abandoned",
+      "failed",
+    ]),
+    result: z.enum(["unknown", "partial", "verified", "failed"]),
+    fulfillment: z.enum(["unknown", "pending", "fulfilled", "declined"]),
+    appraisal: z.string().max(2000).nullable(),
+    causeHypothesis: z.string().max(2000).nullable(),
+  })
+  .strict();
+export const activityReviewSchema = z
+  .object({
+    experienceId: memoryNodeIdSchema,
+    perspective: z.enum([
+      "activity-appraisal",
+      "self-observation",
+      "relationship-impression",
+    ]),
+    assessment: nonBlank.max(1200),
+    appliesTo: nonBlank.max(600),
+    counterexampleIds: z.array(nonBlank).max(24),
+  })
+  .strict();
+
+export type ActivityReflection = z.infer<typeof activityReflectionSchema>;
+
 /** Native metadata is deliberately separate from the historical free-form graph. */
 export const nativeMemoryMetadataSchema = memoryNodeMetadataSchema.extend({
   occurredAt: z.iso.datetime({ offset: true }),
@@ -143,6 +186,8 @@ export const nativeMemoryMetadataSchema = memoryNodeMetadataSchema.extend({
   sourceIds: z.array(nonBlank).default([]),
   aliases: z.array(nonBlank).default([]),
   evidence: personEvidenceSchema.exactOptional(),
+  activityReflection: activityReflectionSchema.exactOptional(),
+  activityReview: activityReviewSchema.exactOptional(),
   // 所有 native 类型共用的服务端来源归属；可选字段保留历史 publication 的解析与哈希。
   proofOwners: z
     .array(

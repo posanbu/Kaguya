@@ -538,6 +538,19 @@ export class PostgresNativeMemoryStore
                 text: source.text,
                 originalInformationId: source.id,
                 memorySource: source,
+                ...(internal && evidence.payload.activityReflection
+                  ? {
+                      sourceDependencies: [
+                        ...new Set([
+                          ...evidence.payload.basis,
+                          ...evidence.payload.activityReflection.receiptIds,
+                          ...evidence.payload.activityReflection.artifactIds,
+                          ...evidence.payload.activityReflection.feedbackIds,
+                          ...evidence.payload.activityReflection.deliveryIds,
+                        ]),
+                      ],
+                    }
+                  : {}),
                 ...(sourceOwners.length
                   ? { sourceProofVersion: 1, sourceOwners }
                   : {}),
@@ -1065,6 +1078,30 @@ export class PostgresNativeMemoryStore
             throw new NativeMemoryError("memory_operation_conflict");
           return saved.rows[0].nodes;
         }
+        const candidate = p.nodes.length === 1 ? p.nodes[0]!.node : undefined;
+        const checkpoint = candidate?.metadata.activityReflection;
+        const hostUpdate =
+          checkpoint &&
+          p.actor === "automatic" &&
+          !p.invalidations?.length &&
+          p.operationId ===
+            `internal-memory:${candidate!.metadata.sourceIds[0]}`;
+        if (hostUpdate) {
+          // The internal-source writer shares this advisory lock. Even a later
+          // no-change notification fences an older event replayed out of order.
+          const newer = await tx.query(
+            `SELECT 1 FROM information_atoms WHERE kind='agent.continuity.internal-source.v1'
+             AND source='runtime:continuity' AND payload->>'scope'=$1
+             AND payload->'activityReflection'->>'activityId'=$2
+             AND (payload->'activityReflection'->>'activityRevision')::bigint>$3 LIMIT 1`,
+            [
+              candidate!.metadata.scope,
+              checkpoint.activityId,
+              checkpoint.activityRevision,
+            ],
+          );
+          if (newer.rowCount) return [];
+        }
         if (p.invalidations?.length && p.actor !== "manual")
           throw new NativeMemoryError(
             "memory_invalidation_requires_manual",
@@ -1558,6 +1595,7 @@ export class PostgresNativeMemoryStore
           [p.operationId, hash, informationId, JSON.stringify(nodes)],
         );
         await invalidateContinuityDependencies(tx, {
+          ...(hostUpdate ? { reportingActivityId: checkpoint.activityId } : {}),
           informationId,
           at: new Date().toISOString(),
           nodeIds: nodes.map((n) => n.id),

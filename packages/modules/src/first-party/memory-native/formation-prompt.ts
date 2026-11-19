@@ -15,6 +15,18 @@ export function createFormationPromptRenderer(template: string) {
         name: "context",
         content: JSON.stringify({
           ...p,
+          ...(p.activityReviewIntervalMs !== undefined
+            ? {
+                activityReviewInstructions: {
+                  activity:
+                    "活动评价逐项读取 activityReflection 的期待、模型报告的步骤、实际回执和外部结果。评价及原因假设分别保存，允许为空。更正、反例或撤回用原经历 ID 提交 correct、reopen 或 seal，填写 activityReview，保留来源。",
+                  consolidation:
+                    "整理经历时按原始来源去重。反例放在 counterexampleIds，appliesTo 写适用范围，assessment 写个人解释。具体经历的 perspective 为 activity-appraisal。",
+                  revision:
+                    "较慢修订只在新的独立来源和足够时间跨度内提出。self-observation 仅指自身认识。relationship-impression 是 Kaguya 对特定人物的推断。仅有短时情绪、同一来源或证据不足时返回空 nodes 与 edges。",
+                },
+              }
+            : {}),
           ...(p.formationPolicy
             ? {
                 formationRules: {

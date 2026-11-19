@@ -4,6 +4,8 @@ import {
   type DeepReadonly,
   type InformationAtom,
   type JsonObject,
+  activityMemoryDependency,
+  nativeMemorySnapshotSchema,
 } from "@kaguya/schema";
 import {
   actionOutcomeSchema,
@@ -44,7 +46,7 @@ import {
   lifecycleStartedInformationKind,
   lifecycleStartupCapability,
 } from "../lifecycle/pulse.js";
-import { publishInternalMemory } from "./memory.js";
+import { activityExperienceId, publishInternalMemory } from "./memory.js";
 
 export const continuitySettingsSchema = z
   .object({
@@ -151,10 +153,27 @@ export function continuityChoiceFor(view: Pick<ContinuityView, "activities">) {
         });
     });
 }
+function unverifiedActivityResult(
+  previous: Activity["externalResult"],
+  receipts: readonly { outcome: { status: string } }[],
+): Activity["externalResult"] {
+  if (previous === "verified") return previous;
+  const outcomes = receipts.map((r) => r.outcome.status);
+  if (previous === "partial" || outcomes.includes("partial")) return "partial";
+  if (
+    outcomes.length &&
+    outcomes.every((s) => s === "rejected" || s === "cancelled")
+  )
+    return "failed";
+  return outcomes.length ? "unknown" : previous;
+}
+
 const executionOutput = z
   .object({
     status: z.enum(["continue", "complete", "waiting", "failed"]),
     summary: z.string().max(4000),
+    appraisal: z.string().max(2000).nullable().optional(),
+    causeHypothesis: z.string().max(2000).nullable().optional(),
     nextStep: z.string().max(4000),
     completedSteps: z.array(z.string().max(2000)).max(100),
     resources: z
@@ -350,11 +369,20 @@ export function createContinuityModule(
         context: InformationModuleHandlerContext,
         activityId?: string,
       ) => {
+        const view = await context
+          .use(continuityCapability)
+          .read(agentId, scope);
+        const recent = [...(view?.activities ?? [])]
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+          .slice(0, 8);
         const memory = await context.use(nativeMemoryCapability).freeze({
           scope,
           owners: ["self:kaguya", `conversation:${scope}`],
           asOf: context.now().toISOString(),
           query: "当前兴趣、关注、活动和约定",
+          explicitIds: recent.map((a) =>
+            activityExperienceId(agentId, scope, a.id),
+          ),
         });
         return context.use(continuityCapability).freeze({
           agentId,
@@ -607,6 +635,9 @@ export function createContinuityModule(
           if (choice.action === "create") {
             if (!choice.goal.trim() || !choice.title.trim())
               throw new Error("empty-activity-goal");
+            const choiceMemory = nativeMemorySnapshotSchema.parse(
+              f.atom.payload.memory,
+            );
             activity = await access.create({
               agentId,
               operationId: `${atom.informationId}:create`,
@@ -620,14 +651,9 @@ export function createContinuityModule(
                 nextStep: choice.nextStep,
                 sources: [result.terminalInformationId, f.informationId],
                 memoryDependencies: [
-                  ...(f.atom.payload.memory as any).fixed,
-                  ...(f.atom.payload.memory as any).recalled.map(
-                    (r: any) => r.node,
-                  ),
-                ].map((n: any) => ({
-                  id: n.id,
-                  revision: n.metadata.revision,
-                })),
+                  ...choiceMemory.fixed,
+                  ...choiceMemory.recalled.map((r) => r.node),
+                ].map(activityMemoryDependency),
               },
             });
           } else {
@@ -771,11 +797,10 @@ export function createContinuityModule(
               change: {
                 state: "waiting",
                 reason,
-                externalResult: savedReceipts.some(
-                  (r) => r.outcome.status === "partial",
-                )
-                  ? "partial"
-                  : "unknown",
+                externalResult: unverifiedActivityResult(
+                  activity.externalResult,
+                  savedReceipts,
+                ),
                 nextStep: "核对原工具回执后继续，结果未知的写入不能重发",
               },
               basis: [
@@ -896,9 +921,10 @@ export function createContinuityModule(
               artifacts: resourceIds,
               externalResult: completed
                 ? "verified"
-                : savedReceipts.some((r) => r.outcome.status === "partial")
-                  ? "partial"
-                  : "unknown",
+                : unverifiedActivityResult(
+                    activity.externalResult,
+                    savedReceipts,
+                  ),
               nextCheckAt: finished
                 ? null
                 : new Date(
@@ -909,21 +935,6 @@ export function createContinuityModule(
               run.terminalInformationId,
               ...savedReceipts.map((r) => r.receiptId),
             ],
-          });
-          await access.internalSource({
-            operationId: `${atom.informationId}:experience`,
-            source: {
-              agentId,
-              ownerId: "self:kaguya",
-              scope,
-              type: "experience",
-              text: `${activity.title}。宿主保存了 ${savedReceipts.length} 条工具回执和 ${resourceIds.length} 条资源引用。执行状态：${activity.state}。核对结果：${activity.externalResult}。模型说明（其文字不独立证明外部效果）：${output.summary}。下一步：${activity.nextStep}`,
-              basis: [
-                activity.informationId,
-                ...savedReceipts.map((r) => r.receiptId),
-              ],
-              occurredAt: activity.updatedAt,
-            },
           });
           status = completed ? "completed" : "waiting";
           reason = output.summary;
@@ -1123,10 +1134,60 @@ export function createContinuityModule(
             },
           ),
           onInformation(
-            continuityInternalKind,
-            { subscriptionId: "agent.continuity.memory", delivery: "durable" },
+            continuityActivityKind,
+            {
+              subscriptionId: "agent.continuity.activity-reflection",
+              delivery: "durable",
+            },
             async (atom, context) => {
-              await publishInternalMemory(atom, context);
+              const operation = String(atom.payload.operationId ?? "");
+              const activity = atom.payload.activity as unknown as Activity;
+              if (!(
+                operation.endsWith(":result") ||
+                operation.endsWith(":failure") ||
+                operation.startsWith("feedback:") ||
+                (operation.startsWith("delivery:") &&
+                  activity.artifacts.length > 0) ||
+                (activity.state === "abandoned" &&
+                  (operation.startsWith("control:") ||
+                    operation.endsWith(":abandon")))
+              ))
+                return;
+              await context.use(continuityCapability).internalSource({
+                operationId: `activity-reflection:${atom.informationId}`,
+                source: {
+                  agentId,
+                  scope: activity.scope,
+                  ownerId: "self:kaguya",
+                  type: "experience",
+                  occurredAt: activity.updatedAt,
+                  text: activity.title,
+                  basis: [atom.informationId],
+                },
+              });
+            },
+          ),
+          onInformation(
+            continuityInternalKind,
+            {
+              subscriptionId: "agent.continuity.memory",
+              delivery: "durable",
+            },
+            async (atom, context) => {
+              try {
+                await publishInternalMemory(atom, context);
+              } catch (error) {
+                // Source withdrawal and a manual lock remain authoritative after replay.
+                if (
+                  atom.payload.activityReflection &&
+                  error instanceof Error &&
+                  ["memory_source_invalidated", "memory_node_locked"].includes(
+                    error.message,
+                  )
+                )
+                  return;
+                throw error;
+              }
               if (atom.payload.type !== "persona-seed") return;
               await context.select(selected);
               const view = (await context

@@ -45,3 +45,5 @@
 服务端从冻结快照生成 expectedVersions，从存储证明派生来源归属和 predecessors。自动合并／拆分也必须经过当前有效性、人工锁、来源失效和预期版本检查。归档输入不能再次分叉，已有节点不能被冒充为新输出。原始提案以 batchId 作为 operationId 发布；重复执行返回同一结果，冲突触发持久后继批次重新冻结。
 
 空结果和无变化只确认读取范围。失败保留已发布版本及待处理来源。查询通过 `NativeMemoryAccess.freeze/recall/prepare` 携带作用域、所有者、时间与 publication cutoff；历史分页、原生工具的读写授权由 database/runtime 的现有端口负责。形成器不另建记忆存储或前台 writer。
+
+活动经历通过 `activityReflection` 保留宿主结果。新入站来源可在同一版本链上提交 `activityReview`。较慢的自我或关系修订按实际观察时间受 `activityReviewIntervalMs` 约束。详见[活动反思与更正](../../../../../docs/developers/continuous/self-activity.md#活动反思与更正)。
