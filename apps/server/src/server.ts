@@ -688,8 +688,10 @@ export async function startKaguyaServer(
           }),
         );
         pluginSnapshots.set(pluginSnapshotKey(snapshot), nextPlugins);
+        // This connection was prepared when mounted. Running schema DDL while
+        // the old Runtime still writes ledger entries can deadlock with it.
         if (database)
-          await prepareConfigurationDatabase(
+          await synchronizeConfigurationKinds(
             database,
             nextPlugins.kindRegistry,
           );
@@ -1259,10 +1261,7 @@ async function prepareConfigurationDatabase(
 ): Promise<void> {
   try {
     await database.prepareSchema();
-    await database.information.synchronizeKinds(
-      registry.definitions().map(({ kind }) => kind),
-      registry.definitions(),
-    );
+    await synchronizeConfigurationKinds(database, registry);
   } catch (error) {
     if (
       error instanceof UnsupportedDatabaseSchemaError ||
@@ -1271,6 +1270,17 @@ async function prepareConfigurationDatabase(
       throw error;
     throw new InformationDatabaseConnectionError(error);
   }
+}
+
+async function synchronizeConfigurationKinds(
+  database: KaguyaDatabase,
+  registry: ReturnType<typeof createRuntimeKindRegistry>,
+): Promise<void> {
+  const definitions = registry.definitions();
+  await database.information.synchronizeKinds(
+    definitions.map(({ kind }) => kind),
+    definitions,
+  );
 }
 
 async function startInformationRuntime(runtime: KaguyaRuntime): Promise<void> {

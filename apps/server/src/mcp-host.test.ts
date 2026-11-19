@@ -1402,6 +1402,9 @@ it(
   async () => {
     const f = await fixture("stdio");
     const server = await f.start();
+    // The live ledger is already initialized. A second schema preparation here
+    // can deadlock with its writer before the injected rebuild failure is reached.
+    const schemaPreparation = vi.spyOn(f.db, "prepareSchema");
     const original = McpHost.prototype.close;
     let failed: McpHost | undefined;
     const calls = new Map<McpHost, number>();
@@ -1444,6 +1447,7 @@ it(
         revision: selected.selectedRevision,
       },
     });
+    expect(schemaPreparation).not.toHaveBeenCalled();
     expect(applied.json()).toMatchObject({
       data: { status: "failed", errorCode: "shutdown_failed" },
     });
