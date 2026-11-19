@@ -13,6 +13,7 @@ export async function invalidateContinuityDependencies(
     sourceIds: string[];
     personIds: string[];
     at: string;
+    reportingActivityId?: string;
   },
 ) {
   if (
@@ -21,6 +22,22 @@ export async function invalidateContinuityDependencies(
     !input.personIds.length
   )
     return;
+  // A plan can depend on an internal summary of a withdrawn receipt or feedback.
+  // Expand canonical proof roots before comparing the plan's frozen source IDs.
+  const sourceIds = input.sourceIds.length
+    ? (
+        await tx.query<{ id: string }>(
+          `WITH RECURSIVE affected(id) AS (
+       SELECT unnest($1::text[]) UNION
+       SELECT a.payload->>'originalInformationId' FROM affected d JOIN information_atoms a
+       ON a.kind='memory.native.source.v1' AND a.payload->>'sourceProofVersion'='1'
+       AND a.payload->'sourceDependencies' ? d.id
+       WHERE a.information_id='memory-native-source:'||(a.payload->>'originalInformationId')
+     ) SELECT id FROM affected`,
+          [input.sourceIds],
+        )
+      ).rows.map((r) => r.id)
+    : input.sourceIds;
   const rows = (
     await tx.query<{ value: Activity }>(
       `SELECT value FROM information_continuity_activities WHERE (state=ANY($1::text[]) OR (state='completed' AND value->>'kind'='commitment' AND value->>'fulfillment'=ANY(ARRAY['pending','unknown']))) AND (
@@ -33,12 +50,15 @@ export async function invalidateContinuityDependencies(
       [
         ["candidate", "active", "waiting", "paused"],
         input.nodeIds,
-        input.sourceIds,
+        sourceIds,
         input.personIds,
       ],
     )
   ).rows;
   for (const { value: old } of rows) {
+    // A new checkpoint may update its own experience. Its existing timer handles
+    // the next choice. External corrections still invalidate this activity.
+    if (old.id === input.reportingActivityId) continue;
     const a = activitySchema.parse({
       ...old,
       informationId: randomUUID(),

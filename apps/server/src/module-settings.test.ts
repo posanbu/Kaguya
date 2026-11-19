@@ -197,7 +197,7 @@ it("first-party editable schemas expose names, constraints and no invented insta
     ),
   ).toBeUndefined();
   expect((await service.get("memory.native")).fields.map((f) => f.key)).toEqual(
-    ["semanticEmbedding", "languageEmbedding"],
+    ["activityReviewIntervalMs", "semanticEmbedding", "languageEmbedding"],
   );
 });
 it("maps an invalid array element to its public field path", async () => {

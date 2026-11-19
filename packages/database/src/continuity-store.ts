@@ -26,6 +26,7 @@ import {
   informationAtomSchema,
   nativeMemorySnapshotSchema,
   activityChangeSchema,
+  activityMemoryDependency,
   type NativeMemorySnapshot,
   type ContinuityHost,
 } from "@kaguya/schema";
@@ -569,7 +570,12 @@ export class PostgresContinuityStore implements ContinuityAccess {
             throw new Error("main-slot-busy");
         }
         let rebase: Partial<Activity> = {};
-        if (old.reevaluationRequired && change.reevaluationRequired === false) {
+        const reevaluating =
+          old.reevaluationRequired && change.reevaluationRequired === false;
+        if (
+          reevaluating ||
+          (change.state === "active" && input.operationId.endsWith(":start"))
+        ) {
           const choices = (
             await tx.query<{
               information_id: string;
@@ -585,38 +591,54 @@ export class PostgresContinuityStore implements ContinuityAccess {
           ).rows;
           const selected = choices.find(
             (c) =>
-              c.payload.output?.action === "continue" &&
-              c.payload.output.activityId === old.id &&
-              c.frozen.view?.activities?.some(
-                (a: any) =>
-                  a.id === old.id && a.informationId === old.informationId,
-              ),
+              (c.payload.output?.action === "continue" &&
+                c.payload.output.activityId === old.id &&
+                c.frozen.view?.activities?.some(
+                  (a: Activity) =>
+                    a.id === old.id && a.informationId === old.informationId,
+                )) ||
+              (!reevaluating &&
+                c.payload.output?.action === "create" &&
+                old.sources.includes(c.information_id) &&
+                old.sources.includes(c.source_id)),
           );
-          if (!selected) throw new Error("reevaluation-unproved");
-          const memory = nativeMemorySnapshotSchema.parse(
-            selected.frozen.memory,
-          );
-          if (memory.scope !== old.scope)
-            throw new Error("memory-scope-mismatch");
-          const output = selected.payload.output;
-          rebase = {
-            sources: [
-              ...new Set([
-                selected.information_id,
-                selected.source_id,
-                ...(old.kind === "commitment"
-                  ? [old.acceptedBy!, old.acceptedFrom!]
-                  : []),
-              ]),
-            ],
-            memoryDependencies: [
-              ...memory.fixed,
-              ...memory.recalled.map((r) => r.node),
-            ].map((n) => ({ id: n.id, revision: n.metadata.revision })),
-            title: output.title?.trim() || old.title,
-            goal: output.goal?.trim() || old.goal,
-            nextStep: output.nextStep?.trim() || old.nextStep,
-          };
+          if (!selected && reevaluating)
+            throw new Error("reevaluation-unproved");
+          if (selected) {
+            const memory = nativeMemorySnapshotSchema.parse(
+              selected.frozen.memory,
+            );
+            if (memory.scope !== old.scope)
+              throw new Error("memory-scope-mismatch");
+            const output = selected.payload.output;
+            rebase = {
+              choiceEvidence: {
+                inputId: selected.source_id,
+                decisionId: selected.information_id,
+                reason: output.reason,
+              },
+              sources: [
+                ...new Set([
+                  selected.information_id,
+                  selected.source_id,
+                  ...(old.kind === "commitment"
+                    ? [old.acceptedBy!, old.acceptedFrom!]
+                    : []),
+                ]),
+              ],
+              memoryDependencies: [
+                ...memory.fixed,
+                ...memory.recalled.map((r) => r.node),
+              ].map(activityMemoryDependency),
+              ...(reevaluating
+                ? {
+                    title: output.title?.trim() || old.title,
+                    goal: output.goal?.trim() || old.goal,
+                    nextStep: output.nextStep?.trim() || old.nextStep,
+                  }
+                : {}),
+            };
+          }
         }
         if (change.deliveryIds?.length) {
           const linked = await tx.query<{ id: string }>(
@@ -747,6 +769,8 @@ export class PostgresContinuityStore implements ContinuityAccess {
   }
   async internalSource(input: { operationId: string; source: InternalSource }) {
     const source = internalSourceSchema.parse(input.source);
+    if (source.activityReflection)
+      throw new Error("reflection-is-host-derived");
     const { occurredAt: _at, basis: _basis, ...seedIdentity } = source;
     const { occurredAt: _decisionAt, ...decisionIdentity } = source;
     return this.operation(
@@ -822,6 +846,74 @@ export class PostgresContinuityStore implements ContinuityAccess {
           )
         )
           throw new Error("unproven-experience");
+        if (input.operationId.startsWith("activity-reflection:")) {
+          const fact = basis.rows[0];
+          const parsed = activitySchema.safeParse(fact?.payload.activity);
+          if (
+            source.type !== "experience" ||
+            source.basis.length !== 1 ||
+            fact?.kind !== "agent.continuity.activity.v1" ||
+            fact.source !== "runtime:continuity" ||
+            !parsed.success ||
+            parsed.data.informationId !== source.basis[0] ||
+            parsed.data.scope !== source.scope ||
+            parsed.data.agentId !== source.agentId ||
+            input.operationId !==
+              `activity-reflection:${parsed.data.informationId}`
+          )
+            throw new Error("unproven-activity-reflection");
+          const a = parsed.data;
+          const evidence = (
+            await tx.query<{
+              information_id: string;
+              kind: string;
+              payload: any;
+            }>(
+              `SELECT p.information_id,p.kind,p.payload FROM information_references r
+             JOIN information_atoms p ON p.information_id=r.target_information_id
+             WHERE r.information_id=$1 AND p.kind=ANY($2::text[]) ORDER BY p.information_id`,
+              [
+                a.informationId,
+                [
+                  "core.action.result.v1",
+                  "core.action.reconciled.v1",
+                  "core.model.task.completed",
+                ],
+              ],
+            )
+          ).rows;
+          const output = evidence.find(
+            (e) =>
+              e.kind === "core.model.task.completed" &&
+              e.payload.taskId === "agent.continuity.execute",
+          )?.payload.output;
+          const receiptIds = [
+            ...new Set([
+              ...a.checkpointReceiptIds,
+              ...evidence
+                .filter((e) => e.kind !== "core.model.task.completed")
+                .map((e) => e.information_id),
+            ]),
+          ];
+          source.activityReflection = {
+            activityId: a.id,
+            activityRevision: a.revision,
+            activityInformationId: a.informationId,
+            expectation: a.goal,
+            reportedSteps: a.completedSteps,
+            receiptIds,
+            artifactIds: a.artifacts,
+            feedbackIds: a.feedbackIds,
+            deliveryIds: a.deliveryIds,
+            state: a.state,
+            result: a.externalResult,
+            fulfillment: a.fulfillment,
+            appraisal: output?.appraisal ?? null,
+            causeHypothesis: output?.causeHypothesis ?? null,
+          };
+          source.occurredAt = a.updatedAt;
+          source.text = `${a.title}。目标：${a.goal}。执行状态：${a.state}。外部结果：${a.externalResult}。履约：${a.fulfillment}。宿主记录了 ${receiptIds.length} 条回执和 ${a.artifacts.length} 个产物。`;
+        }
         const related = [
           ...new Set(
             basis.rows

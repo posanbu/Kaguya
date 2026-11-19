@@ -33,7 +33,7 @@ const scope = JSON.stringify(["qq", "qq", "group", "experience-test"]);
 const policy = "experience-operations.v1" as const;
 const read = {
   scope,
-  owners: ["person:a", "person:b", `conversation:${scope}`],
+  owners: ["person:a", "person:b", "self:kaguya", `conversation:${scope}`],
   asOf: "2030-01-01T00:00:00.000Z",
   query: "经历",
 };
@@ -59,6 +59,7 @@ async function fixture(create: () => ReturnType<typeof createTestingDatabase>) {
       kind: string,
       payload: Record<string, unknown>,
       references: { relation: string; informationId: string }[] = [],
+      occurredAt = at,
     ) =>
       db.information.append(
         freezeInformationAtom(
@@ -67,7 +68,7 @@ async function fixture(create: () => ReturnType<typeof createTestingDatabase>) {
             kind,
             payload,
             references,
-            occurredAt: at,
+            occurredAt,
             source: "test:experience-operations",
           }),
         ),
@@ -102,24 +103,31 @@ async function fixture(create: () => ReturnType<typeof createTestingDatabase>) {
       id: string,
       text: string,
       speaker = "a",
+      occurredAt = at,
     ): Promise<MemorySource> => {
-      await append(id, "core.message.inbound.text", {
-        text,
-        source: {
-          platform: "qq",
-          adapterId: "qq",
-          senderId: speaker,
-          selfId: "bot",
-          destination: { kind: "group", groupId: "experience-test" },
+      await append(
+        id,
+        "core.message.inbound.text",
+        {
+          text,
+          source: {
+            platform: "qq",
+            adapterId: "qq",
+            senderId: speaker,
+            selfId: "bot",
+            destination: { kind: "group", groupId: "experience-test" },
+          },
         },
-      });
+        [],
+        occurredAt,
+      );
       const value: MemorySource = {
         id,
         text,
         ownerId: `person:${speaker}`,
         scope,
-        occurredAt: at,
-        collectedAt: at,
+        occurredAt,
+        collectedAt: occurredAt,
         sourceType: "inbound",
         participants: [
           {
@@ -616,6 +624,201 @@ describe.each(backends)(
             .map((n) => n.id)
             .sort(),
         ).toEqual([left, right].sort());
+      } finally {
+        await f.close();
+      }
+    });
+
+    it("keeps a corrected interpretation distinct from the receipt, freezes its sources and rejects repeated evidence", async () => {
+      const f = await fixture(create);
+      try {
+        const original = await f.source("activity-source", "阅读记录与回执");
+        const first = await f.source(
+          "reader-correction",
+          "更正：这个脚注讨论的是下一章。",
+        );
+        const id = stableId("host", "reading");
+        const facts = {
+          activityId: "reading",
+          activityRevision: 2,
+          activityInformationId: "activity-v2",
+          expectation: "核对第一章",
+          reportedSteps: ["阅读脚注"],
+          receiptIds: [],
+          artifactIds: [],
+          deliveryIds: [],
+          feedbackIds: [],
+          state: "waiting" as const,
+          result: "unknown" as const,
+          fulfillment: "unknown" as const,
+          appraisal: null,
+          causeHypothesis: null,
+        };
+        await f.memory.publish({
+          operationId: "host",
+          actor: "manual",
+          nodes: [
+            {
+              expectedRevision: 0,
+              node: {
+                id,
+                content: "外部结果未知",
+                metadata: {
+                  kind: "experience",
+                  ownerId: "self:kaguya",
+                  level: 1,
+                  scope,
+                  system: "native-v1",
+                  occurredAt: at,
+                  tags: [],
+                  aliases: [],
+                  revision: 1,
+                  locked: false,
+                  status: "active",
+                  sourceIds: [original.id],
+                  experience: {
+                    state: "open",
+                    policyVersion: "experience.v1",
+                    predecessors: [],
+                  },
+                  activityReflection: facts,
+                },
+              },
+            },
+          ],
+          edges: [],
+        });
+        const before = await f.freeze();
+        const review = {
+          experienceId: id,
+          perspective: "activity-appraisal",
+          assessment: "脚注的章节归属需要更正",
+          appliesTo: "这一次阅读",
+          counterexampleIds: [first.id],
+        };
+        const n = {
+          ...proposal(id, [original.id, first.id], "声称成功"),
+          ownerId: "self:kaguya",
+          activityReview: review,
+        };
+        const output = {
+          nodes: [n],
+          edges: [],
+          experienceOperation: {
+            kind: "correct",
+            inputIds: [id],
+            outputIds: [id],
+          },
+        };
+        const form = (
+          batchId: string,
+          existing: NativeMemorySnapshot,
+          output: unknown,
+          atTime = at,
+          sources = [first],
+        ) =>
+          publishFormation(
+            {
+              batchId,
+              scope,
+              existing,
+              formationPolicy: policy,
+              sources,
+              activityReviewIntervalMs: 86400000,
+            },
+            { status: "completed", output },
+            atTime,
+            f.memory,
+          );
+        expect((await form("correct", before, output)).reason).toBe(
+          "published",
+        );
+        expect((await form("correct", before, output)).reason).toBe(
+          "published",
+        );
+        const after = await f.freeze();
+        expect(revision(after, id)).toMatchObject({
+          content: "外部结果未知",
+          metadata: {
+            revision: 2,
+            activityReflection: facts,
+            activityReview: review,
+          },
+        });
+        expect((await form("repeat", after, output)).status).toBe("rejected");
+        expect(
+          (await form("empty", after, { nodes: [], edges: [] })).reason,
+        ).toBe("empty");
+        const self = {
+          ...n,
+          key: "understanding",
+          kind: "self",
+          activityReview: { ...review, perspective: "self-observation" },
+        };
+        expect(
+          (await form("immediate", after, { nodes: [self], edges: [] })).status,
+        ).toBe("rejected");
+        const later = "2026-10-24T00:00:00.000Z";
+        expect(
+          (
+            await form(
+              "reprocessed",
+              after,
+              { nodes: [self], edges: [] },
+              later,
+            )
+          ).status,
+        ).toBe("rejected");
+        const independent = await f.source(
+          "follow-up",
+          "第二次核对也观察到章节差异",
+          "a",
+          later,
+        );
+        expect(
+          (
+            await form(
+              "later",
+              after,
+              {
+                nodes: [
+                  { ...self, sourceIds: [...self.sourceIds, independent.id] },
+                ],
+                edges: [],
+              },
+              later,
+              [first, independent],
+            )
+          ).reason,
+        ).toBe("published");
+        expect(await f.db.memoryGraph.native.history(id)).toHaveLength(2);
+        expect(
+          await f.db.memoryGraph.native.current(
+            { ...read, cutoff: before.cutoff! },
+            [id],
+          ),
+        ).toMatchObject([
+          { content: "外部结果未知", metadata: { revision: 1 } },
+        ]);
+        await f.memory.publish({
+          operationId: "withdraw-correction",
+          actor: "manual",
+          nodes: [],
+          invalidations: [
+            {
+              kind: "source-withdrawal",
+              targetId: first.id,
+              reason: "更正来源撤回",
+            },
+          ],
+        });
+        expect(await f.db.memoryGraph.native.current(read, [id])).toEqual([]);
+        expect(
+          await f.db.memoryGraph.native.current(
+            { ...read, cutoff: after.cutoff! },
+            [id],
+          ),
+        ).toMatchObject([{ metadata: { revision: 2 } }]);
       } finally {
         await f.close();
       }

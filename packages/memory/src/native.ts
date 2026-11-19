@@ -38,6 +38,18 @@ export const nativeEmbeddingSettingsSchema = z
   });
 export const nativeMemorySettingsSchema = z
   .object({
+    activityReviewIntervalMs: z
+      .number()
+      .int()
+      .min(60000)
+      .max(2592000000)
+      .default(86400000)
+      .meta({
+        title: "活动认识整理间隔",
+        public: true,
+        description:
+          "同一范围的长期自我或关系认识至少间隔此时长再次整理。默认一天，收到更正时可立即修订具体经历。",
+      }),
     semanticEmbedding: nativeEmbeddingSettingsSchema
       .default({
         enabled: false,

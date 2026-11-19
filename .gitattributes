@@ -1,1 +1,4 @@
 packages/modules/templates/*.default.hbs text eol=lf
+contracts/situation-action/v1/types.ts text eol=lf
+contracts/situation-action/v1/*.json text eol=lf
+packages/schema/src/situation-context.ts text eol=lf
