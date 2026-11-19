@@ -26,6 +26,7 @@ import {
   lightBootstrapPolicyDeclaration,
   lightPlatformPolicyDeclarations,
   nativeMemoryTemplateDeclaration,
+  continuityTemplateDeclaration,
 } from "../prompt-declarations.js";
 import {
   readPromptResources,
@@ -44,6 +45,7 @@ export interface FirstPartyPromptTemplates {
   };
   readonly heavy: HeavyPromptTemplates;
   readonly nativeMemory: string;
+  readonly continuity: string;
   readonly light: string;
   readonly lightBootstrapPolicy: string;
   readonly lightPlatformPolicies: Readonly<
@@ -58,6 +60,11 @@ export function loadFirstPartyPromptTemplates(
     options.root,
   );
   validatePromptResources([nativeMemoryTemplateDeclaration], nativeMemory);
+  const continuity = readPromptResources(
+    [continuityTemplateDeclaration],
+    options.root,
+  );
+  validatePromptResources([continuityTemplateDeclaration], continuity);
   const messages = readPromptResources(
     heavyModulePromptTemplates,
     options.root,
@@ -130,6 +137,7 @@ export function loadFirstPartyPromptTemplates(
       ]),
     ) as unknown as FirstPartyPromptTemplates["qqExpression"],
     nativeMemory: nativeMemory[0]!.content,
+    continuity: continuity[0]!.content,
     identityName,
     identityAliases,
     identityPersona: identity[2]!.content,

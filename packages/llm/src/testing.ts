@@ -6,6 +6,58 @@
  */
 import { MockLanguageModelV3 } from "ai/test";
 
+export function createNativeDeterministicModel(
+  outputs: readonly (
+    { text: string } | { calls: { id: string; name: string; input: string }[] }
+  )[],
+) {
+  return new MockLanguageModelV3({
+    doGenerate: outputs.map((output) => {
+      const base = deterministicResult("text" in output ? output.text : "");
+      return "text" in output
+        ? base
+        : {
+            ...base,
+            content: output.calls.map((call) => ({
+              type: "tool-call" as const,
+              toolCallId: call.id,
+              toolName: call.name,
+              input: call.input,
+            })),
+            finishReason: { unified: "tool-calls" as const, raw: undefined },
+          };
+    }),
+  });
+}
+export function createNativeScriptedModel(
+  generate: (
+    request: Parameters<MockLanguageModelV3["doGenerate"]>[0],
+    index: number,
+  ) => Promise<
+    { text: string } | { calls: { id: string; name: string; input: string }[] }
+  >,
+) {
+  let index = 0;
+  return new MockLanguageModelV3({
+    doGenerate: async (request) => {
+      const output = await generate(request, index++);
+      const base = deterministicResult("text" in output ? output.text : "");
+      return "text" in output
+        ? base
+        : {
+            ...base,
+            content: output.calls.map((call) => ({
+              type: "tool-call" as const,
+              toolCallId: call.id,
+              toolName: call.name,
+              input: call.input,
+            })),
+            finishReason: { unified: "tool-calls" as const, raw: undefined },
+          };
+    },
+  });
+}
+
 export function createDeterministicModel(
   outputs: readonly unknown[],
 ): MockLanguageModelV3 {

@@ -10,6 +10,7 @@ import { nativeMemorySnapshotSchema } from "@kaguya/schema";
 import { canonicalMemorySourceId } from "@kaguya/memory";
 import { readMemoryView } from "./native-memory-history.js";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   z,
   legacyHeartbeatScope,
@@ -270,6 +271,54 @@ export class PostgresObservationStore implements ObservationAccess {
   ): Promise<Set<string>> {
     if (manifest.proofKind === "memory-native")
       return this.validateMemoryManifest(tx, contract, manifest);
+    if (manifest.proofKind === "continuity") {
+      if (
+        contract.consumerId !== "agent.continuity" ||
+        contract.kinds.length !== 1 ||
+        contract.kinds[0] !== "agent.continuity.execution.frozen.v1" ||
+        manifest.runInformationId !== manifest.frozenInformationId ||
+        manifest.knowledgeCutoff.informationId !==
+          manifest.frozenInformationId ||
+        manifest.sourceInformationIds.length !== 1 ||
+        manifest.sourceInformationIds[0] !== manifest.frozenInformationId
+      )
+        throw new ObservationConflictError();
+      const row = (
+        await tx.query<{ payload: any; source: string; position: string }>(
+          `SELECT a.payload,a.source,l.position::text FROM information_atoms a JOIN information_lifecycle l USING(information_id)
+        WHERE a.information_id=$1 AND a.kind='agent.continuity.execution.frozen.v1'`,
+          [manifest.frozenInformationId],
+        )
+      ).rows[0];
+      if (
+        !row ||
+        row.source !== "runtime:continuity" ||
+        !isDeepStrictEqual(row.payload, manifest.content) ||
+        sceneIdentity(row.payload.source) !== sceneIdentity(contract.address) ||
+        !row.payload.activityId ||
+        !row.payload.view.activities.some(
+          (a: any) => a.id === row.payload.activityId && a.state === "active",
+        )
+      )
+        throw new ObservationConflictError();
+      const memory = nativeMemorySnapshotSchema.parse(row.payload.memory);
+      const revisions = [
+        ...memory.fixed,
+        ...memory.recalled.map((r) => r.node),
+        ...(memory.personCandidates ?? []).map((p) => p.summary),
+      ].map((n) => ({ id: n.id, revision: n.metadata.revision }));
+      const canonical = (v: { id: string; revision: number }[]) =>
+        JSON.stringify([...v].sort((a, b) => a.id.localeCompare(b.id)));
+      if (
+        canonical(revisions) !==
+          canonical(manifest.knowledgeCutoff.memoryRevisions) ||
+        memory.cutoff?.publicationPosition !==
+          manifest.knowledgeCutoff.memoryPublicationPosition ||
+        BigInt(memory.cutoff?.publicationPosition ?? "0") > BigInt(row.position)
+      )
+        throw new ObservationConflictError();
+      return new Set(manifest.sourceInformationIds);
+    }
     const filter = {
       ...contract.address,
       ...(contract.senderId ? { senderId: contract.senderId } : {}),

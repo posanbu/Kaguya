@@ -4,7 +4,9 @@
  * createTestingDatabase 的可选 vector 标记只为离线 pgvector 集成测试加载 WASM 扩展。
  * 主要职责：`createTestingDatabase` 创建 PGlite；`createPostgresTestingDatabase` 与
  * `createPostgresTestingDatabaseScope` 生成安全的 schema 名，用管理连接创建/销毁 schema，
- * 并以 PostgreSQL startup options 固定测试连接的 search_path。scope 允许在最终清理前关闭和
+ * 并以 PostgreSQL startup options 固定测试连接的 search_path。单键事务 advisory lock
+ * 通过 schema 内函数映射到该测试的锁空间，避免并行测试共享生产仓储的常量锁。
+ * 同一 schema 内及重连后的互斥语义不变。scope 允许在最终清理前关闭和
  * 重连 pool；两者都不自动准备 schema。
  * 代码库关系：PGlite 适配器位于 `pglite-driver.ts`；生产 `driver.ts` 提供 `PgDatabase`；
  * PostgreSQL ledger contract 仅通过本模块获得真实服务 factory，调用方仍只使用 `KaguyaDatabase`。
@@ -72,6 +74,19 @@ export async function createPostgresTestingDatabaseScope(
   try {
     management = new Pool({ connectionString });
     await management.query(`CREATE SCHEMA ${schema}`);
+    // 测试 schema 与锁使用相同隔离边界。显式调用 pg_catalog，避免包装函数递归。
+    await management.query(`
+      CREATE FUNCTION ${schema}.pg_advisory_xact_lock(key bigint)
+      RETURNS void LANGUAGE sql VOLATILE AS $$
+        SELECT pg_catalog.pg_advisory_xact_lock(
+          pg_catalog.hashtextextended('${schema}:' || key::text, 0))
+      $$;
+      CREATE FUNCTION ${schema}.pg_try_advisory_xact_lock(key bigint)
+      RETURNS boolean LANGUAGE sql VOLATILE AS $$
+        SELECT pg_catalog.pg_try_advisory_xact_lock(
+          pg_catalog.hashtextextended('${schema}:' || key::text, 0))
+      $$;
+    `);
     return new SchemaIsolatedPostgresTestingScope(
       connectionString,
       management,
@@ -168,7 +183,8 @@ class SchemaIsolatedPostgresTestingScope implements PostgresTestingDatabaseScope
   private async createConnection(): Promise<KaguyaDatabase> {
     const testing = await PgDatabase.connect({
       connectionString: this.connectionString,
-      startupOptions: `-c search_path=${this.schema}`,
+      // pg_catalog 显式放在末尾，单键锁优先解析到本测试 schema 的包装函数。
+      startupOptions: `-c search_path=${this.schema},pg_catalog`,
     });
     const connection = new SchemaIsolatedPostgresConnection(testing, this);
     if (this.#closed) {

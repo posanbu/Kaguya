@@ -509,6 +509,13 @@ export class LinuxToolsHost {
                 .filter((tool) => !tool.id.startsWith("gui."))
                 .map((tool) => tool.id),
             },
+            {
+              definitionId: "agent.continuity",
+              taskId: "agent.continuity.execute",
+              toolIds: declarations
+                .filter((tool) => !tool.id.startsWith("gui."))
+                .map((tool) => tool.id),
+            },
             ...this.configuration.bindings.flatMap((b) =>
               b.guiModel
                 ? [

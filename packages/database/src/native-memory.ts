@@ -44,6 +44,7 @@ import {
 } from "@kaguya/memory";
 import { informationAtomSchema, freezeInformationAtom } from "@kaguya/schema";
 import { appendInformationAtom } from "./information-repository.js";
+import { invalidateContinuityDependencies } from "./continuity-dependencies.js";
 import type { SqlDatabase, SqlTransaction } from "./driver.js";
 
 function canonicalJson(value: unknown): unknown {
@@ -406,7 +407,37 @@ export class PostgresNativeMemoryStore
       ).rows[0];
       if (!evidence) return false;
       let address: Record<string, any>;
-      if (evidence.kind === "core.message.inbound.text") {
+      const internal = evidence.kind === "agent.continuity.internal-source.v1";
+      if (internal) {
+        const p = evidence.payload;
+        if (
+          source.sourceType !== "internal" ||
+          source.ownerId !== "self:kaguya" ||
+          p.ownerId !== "self:kaguya" ||
+          source.scope !== p.scope ||
+          source.text !== p.text ||
+          source.occurredAt !== p.occurredAt ||
+          source.participants.length ||
+          source.replyTo !== null
+        )
+          throw new NativeMemoryError("memory_invalid_source", 400);
+        const persisted = (
+          await tx.query<{ source: string }>(
+            "SELECT source FROM information_atoms WHERE information_id=$1",
+            [source.id],
+          )
+        ).rows[0];
+        if (persisted?.source !== "runtime:continuity")
+          throw new NativeMemoryError("memory_invalid_source", 400);
+        address = {
+          platform: "kaguya",
+          adapterId: "internal",
+          destination: {
+            kind: "web",
+            conversationId: "00000000-0000-4000-8000-000000000001",
+          },
+        };
+      } else if (evidence.kind === "core.message.inbound.text") {
         address = evidence.payload.source;
         if (
           source.sourceType !== "inbound" ||
@@ -447,7 +478,7 @@ export class PostgresNativeMemoryStore
         d.kind,
         d.userId ?? d.groupId ?? d.conversationId ?? null,
       ]);
-      if (scope !== source.scope)
+      if (!internal && scope !== source.scope)
         throw new NativeMemoryError("memory_invalid_source_scope", 400);
       await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,168))", [
         `${address.platform}:${address.adapterId}:${d.kind}:${d.userId ?? d.groupId ?? d.conversationId ?? ""}`,
@@ -463,9 +494,16 @@ export class PostgresNativeMemoryStore
         throw new NativeMemoryError("memory_invalid_source", 400);
       // 冻结原始账号的全部身份依赖，含已拆分身份；people() 的当前解析结果不能替代它。
       const proof = await sourceProofOwners(tx, [source.id]);
-      const sourceOwners = [...proof]
-        .filter(([, ids]) => ids.has(source.id))
-        .map(([owner]) => owner);
+      const sourceOwners = internal
+        ? [
+            "self:kaguya",
+            ...(Array.isArray(evidence.payload.relatedPersonIds)
+              ? evidence.payload.relatedPersonIds
+              : []),
+          ]
+        : [...proof]
+            .filter(([, ids]) => ids.has(source.id))
+            .map(([owner]) => owner);
       if (sourceOwners.length && !sourceOwners.includes(source.ownerId))
         sourceOwners.push(source.ownerId);
       sourceOwners.sort();
@@ -513,6 +551,8 @@ export class PostgresNativeMemoryStore
           { enqueueLogProjection: false },
         );
       }
+      // 内部来源由其持久消费者直接发布，不能进入按真人消息批次整理的队列。
+      if (internal) return true;
       const result = await tx.query(
         "INSERT INTO memory_native_sources(id,scope,source) VALUES($1,$2,$3::jsonb) ON CONFLICT DO NOTHING RETURNING id",
         [source.id, source.scope, JSON.stringify(source)],
@@ -1517,6 +1557,17 @@ export class PostgresNativeMemoryStore
         VALUES($1,$2,$3,$4::jsonb)`,
           [p.operationId, hash, informationId, JSON.stringify(nodes)],
         );
+        await invalidateContinuityDependencies(tx, {
+          informationId,
+          at: new Date().toISOString(),
+          nodeIds: nodes.map((n) => n.id),
+          sourceIds: (p.invalidations ?? [])
+            .filter((e) => e.kind === "source-withdrawal")
+            .map((e) => e.targetId),
+          personIds: (p.invalidations ?? [])
+            .filter((e) => e.kind === "identity-split")
+            .map((e) => e.targetId),
+        });
         return nodes;
       })
       .catch((error: unknown) => {

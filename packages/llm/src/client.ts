@@ -45,10 +45,15 @@ import {
 
 const nativeWireBudget = new AsyncLocalStorage<number | undefined>();
 /** 宿主 SDK fetch 包装器在最终 HTTP JSON 已序列化后计费；拒绝超额请求，不触发网络。 */
-export function boundedModelFetch(send: typeof globalThis.fetch = globalThis.fetch): typeof globalThis.fetch {
+export function boundedModelFetch(
+  send: typeof globalThis.fetch = globalThis.fetch,
+): typeof globalThis.fetch {
   return async (input, init) => {
     const limit = nativeWireBudget.getStore();
-    if (limit !== undefined && (typeof init?.body !== "string" || Buffer.byteLength(init.body) > limit))
+    if (
+      limit !== undefined &&
+      (typeof init?.body !== "string" || Buffer.byteLength(init.body) > limit)
+    )
       throw new Error("Native wire input budget exhausted");
     return send(input, init);
   };
@@ -62,6 +67,8 @@ export type KaguyaLlmRequest<TOutput = unknown> = {
   readonly tools?: readonly NativeToolDeclaration[];
   readonly timeoutMs?: number;
   readonly maxInputBytes?: number;
+  /** 宿主在每一次实际调用前计费，包括结构化恢复尝试。 */
+  readonly beforeAttempt?: (attempt: number) => Promise<void>;
 } & (
   | { readonly prompt: CompiledPrompt; readonly messages?: never }
   | { readonly messages: NativeMessage[]; readonly prompt?: never }
@@ -314,16 +321,23 @@ export class KaguyaLlmClient {
             },
           ]),
         );
+        await request.beforeAttempt?.(1);
         attemptCount = 1;
-        if (request.maxInputBytes !== undefined && (!Number.isSafeInteger(request.maxInputBytes) || request.maxInputBytes < 1))
+        if (
+          request.maxInputBytes !== undefined &&
+          (!Number.isSafeInteger(request.maxInputBytes) ||
+            request.maxInputBytes < 1)
+        )
           throw new Error("Invalid native input budget");
-        const result = await nativeWireBudget.run(request.maxInputBytes, () => generateText({
-          ...common,
-          tools,
-          toolChoice: "auto",
-          stopWhen: isStepCount(1),
-          output: Output.text(),
-        }));
+        const result = await nativeWireBudget.run(request.maxInputBytes, () =>
+          generateText({
+            ...common,
+            tools,
+            toolChoice: "auto",
+            stopWhen: isStepCount(1),
+            output: Output.text(),
+          }),
+        );
         usage = addUsage(usage, result.usage);
         attemptCount = 1;
         signal.throwIfAborted();
@@ -424,6 +438,7 @@ export class KaguyaLlmClient {
       let native: NativeResponse | undefined;
       for (;;) {
         signal.throwIfAborted();
+        await request.beforeAttempt?.(attemptCount + 1);
         attemptCount += 1;
         try {
           const result =

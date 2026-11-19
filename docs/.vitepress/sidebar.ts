@@ -97,6 +97,10 @@ const developerGuide: DefaultTheme.SidebarItem[] = [
         link: "/developers/continuous/memory-formation",
       },
       { text: "决策与行动", link: "/developers/continuous/action-lifecycle" },
+      {
+        text: "自我、状态、活动与关系",
+        link: "/developers/continuous/self-activity",
+      },
     ],
   },
   {

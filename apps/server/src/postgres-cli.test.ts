@@ -149,6 +149,7 @@ it("runs PostgreSQL tests through the installed Vitest entrypoint", async () => 
         new URL("./vitest.mjs", import.meta.resolve("vitest/package.json")),
       ),
       "run",
+      "--maxWorkers=1",
       ...POSTGRES_TEST_FILES,
     ],
     expect.objectContaining({

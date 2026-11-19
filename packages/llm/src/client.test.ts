@@ -24,6 +24,57 @@ const prompt: CompiledPrompt = {
 const outputSchema = z.object({ answer: z.string() }).strict();
 
 describe("generic KaguyaLlmClient boundary", () => {
+  it("admits each provider attempt before invocation and stops when the host denies budget", async () => {
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => {
+        throw new Error("must not invoke");
+      },
+    });
+    const client = new KaguyaLlmClient({ model });
+    const attempts: number[] = [];
+    await expect(
+      client.generate({
+        modelId: "model",
+        prompt,
+        outputMode: "object",
+        outputSchema,
+        beforeAttempt: async (attempt) => {
+          attempts.push(attempt);
+          throw new Error("budget-exhausted");
+        },
+      }),
+    ).rejects.toBeInstanceOf(KaguyaLlmError);
+    expect(attempts).toEqual([1]);
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
+  it("charges structured recovery before its second provider attempt", async () => {
+    const model = new MockLanguageModelV3({
+      doGenerate: {
+        content: [{ type: "text", text: "invalid json" }],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 1, text: 1, reasoning: 0 },
+        },
+        warnings: [],
+      },
+    });
+    const attempts: number[] = [];
+    await expect(
+      new KaguyaLlmClient({ model }).generate({
+        modelId: "model",
+        prompt,
+        outputMode: "object",
+        outputSchema,
+        beforeAttempt: async (attempt) => {
+          attempts.push(attempt);
+          if (attempt === 2) throw new Error("budget-exhausted");
+        },
+      }),
+    ).rejects.toBeInstanceOf(KaguyaLlmError);
+    expect(attempts).toEqual([1, 2]);
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
   it.each(["direct", "retry", "cause"] as const)(
     "extracts blocked credential diagnosis from %s API errors without exposing raw data",
     async (wrapper) => {

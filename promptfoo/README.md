@@ -67,3 +67,9 @@ pnpm exec promptfoo eval -c promptfoo/light-behavior.yaml \
 默认读取仓库的 `light.decision.default.hbs`，刻意不读取 local 覆盖以保证评测版本明确。可用 `KAGUYA_EVAL_TEMPLATE=/absolute/path/to/baseline.hbs` 比较历史模板，或用 `KAGUYA_EVAL_SOURCE_ROOT` 指向已构建源码根目录。两组对照必须使用相同案例、模型、参数和模板变量，保留服务错误及非法响应作为失败分母。
 
 评测完成后按案例比较各次结果，不能只报告平均通过率。原始评测输出、真实日志、profile、local 模板及分享凭据不应提交进仓库。模板在服务器生效需要遵循对应版本的模板加载和配置应用方式；本地 default 的变化不会自动更新已有 local 覆盖。
+
+## 持续活动的实际环境验收
+
+完成构建后，运行 `scripts/evaluate-continuity.mjs`。`KAGUYA_CONTINUITY_EVAL_OUTPUT` 指定私有结果目录。模型模式还需通过 `KAGUYA_CONTINUITY_EVAL_PROFILE` 指定已配置 Profile，沿用生产模型、生成参数、Model Task 和结构恢复路径。加 `--scripted` 使用确定性模型核对真实 Linux 环境，不能当作行为质量证据。脚本使用随机 PostgreSQL schema 和独立容器，不发送平台消息。
+
+分别报告计划场景、全部模型尝试、结构恢复、失败、实际工具效果及 usage。没有价格配置时费用不可用。固定 RFC 工作区不替代生产 Linux broker、真实群聊及长期运行验收。原始冻结输入、完整尝试和笔记保存到忽略目录，不提交真实 Profile 或凭据。

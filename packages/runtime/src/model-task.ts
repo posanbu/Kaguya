@@ -147,6 +147,13 @@ export interface ModelTaskClientOptions {
     model: { providerId: string; modelId: string },
   ) => Promise<NativeMessage[]>;
   readonly readNativeArtifact?: NativeArtifactReader;
+  readonly beforeAttempt?: (
+    requestedInformationId: string,
+    activation: ModuleActivationProvenance,
+    taskId: string,
+    attempt: number,
+    invocationId: string,
+  ) => Promise<void>;
   readonly admitNativeDispatch?: (
     requestedInformationId: string,
     step: NonNullable<ModelTaskRequest<unknown>["nativeStep"]>,
@@ -169,11 +176,13 @@ export class ModelTaskClient implements ModelTaskCapability {
   readonly #now: () => Date;
   readonly #renderStructuredOutputPrompt: StructuredOutputPromptRenderer;
   readonly #admitNativeDispatch: ModelTaskClientOptions["admitNativeDispatch"];
+  readonly #beforeAttempt: ModelTaskClientOptions["beforeAttempt"];
   readonly #inflight = new Map<string, Set<AbortController>>();
   constructor(options: ModelTaskClientOptions) {
     this.#core = options.core;
     this.#prepareMedia = options.prepareMedia;
     this.#admitNativeDispatch = options.admitNativeDispatch;
+    this.#beforeAttempt = options.beforeAttempt;
     this.#client = options.client;
     this.#resolveModel = options.resolveModel;
     this.#readNativeArtifact = options.readNativeArtifact;
@@ -589,7 +598,20 @@ export class ModelTaskClient implements ModelTaskCapability {
           );
         }
       }
+      const invocationId = randomUUID();
       const generation = await this.#client.generate({
+        ...(this.#beforeAttempt
+          ? {
+              beforeAttempt: (attempt: number) =>
+                this.#beforeAttempt!(
+                  requested.informationId,
+                  persisted.activation,
+                  persisted.taskId,
+                  attempt,
+                  invocationId,
+                ),
+            }
+          : {}),
         modelId: persisted.resolvedModel.modelId,
         ...(requested.payload.messages
           ? { messages: nativeMessagesSchema.parse(requested.payload.messages) }

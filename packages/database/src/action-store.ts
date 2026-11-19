@@ -30,6 +30,7 @@ import { type InformationClaim } from "@kaguya/engine";
 import { assertClaimInTransaction } from "./reliable-repository.js";
 import { loadActionProofContext } from "./action-proof-context.js";
 import { checkActionDependencies } from "./action-dependencies.js";
+import { continuityDeliveryProof } from "./continuity-delivery-proof.js";
 import { appendInformationAtom } from "./information-repository.js";
 import type { SqlDatabase, SqlTransaction } from "./driver.js";
 
@@ -554,7 +555,8 @@ export class PostgresActionStore {
       )
     ).rows[0];
     if (!context) throw new Error("delivery-context-missing");
-    const o = p.turn
+    const continuity = await continuityDeliveryProof(this.db, requestId);
+    const o = continuity
       ? (
           await this.db.query<{
             observation_id: string;
@@ -562,12 +564,24 @@ export class PostgresActionStore {
             scene_id: string;
             contract: any;
           }>(
-            `SELECT o.observation_id,o.manifest,p.scene_id,p.contract FROM information_observations o JOIN information_observation_progress p USING(stream_id)
-       WHERE o.manifest->>'runInformationId'=$1 AND p.consumer_id='agent.situation' ORDER BY (o.replacement_observation_id IS NULL),o.through_position LIMIT 1`,
-            [p.turn.claimInformationId],
+            `SELECT o.observation_id,o.manifest,p.scene_id,p.contract FROM information_observations o JOIN information_observation_progress p USING(stream_id) WHERE o.observation_id=$1 AND p.consumer_id='agent.continuity'`,
+            [continuity.input.dependencies.observationId],
           )
         ).rows[0]
-      : undefined;
+      : p.turn
+        ? (
+            await this.db.query<{
+              observation_id: string;
+              manifest: any;
+              scene_id: string;
+              contract: any;
+            }>(
+              `SELECT o.observation_id,o.manifest,p.scene_id,p.contract FROM information_observations o JOIN information_observation_progress p USING(stream_id)
+       WHERE o.manifest->>'runInformationId'=$1 AND p.consumer_id='agent.situation' ORDER BY (o.replacement_observation_id IS NULL),o.through_position LIMIT 1`,
+              [p.turn.claimInformationId],
+            )
+          ).rows[0]
+        : undefined;
     const source = o?.contract.address ?? {
       platform: p.platform,
       adapterId: p.adapterId,
@@ -580,14 +594,16 @@ export class PostgresActionStore {
       d.kind,
       d.userId ?? d.groupId ?? d.conversationId ?? null,
     ]);
-    const decision = o
-      ? (
-          await this.db.query<{ information_id: string }>(
-            `SELECT a.information_id FROM information_atoms a JOIN information_references r USING(information_id) WHERE a.kind='agent.light.decision.completed' AND r.target_information_id=$1 AND r.relation='core:status-of'`,
-            [o.manifest.runInformationId],
-          )
-        ).rows[0]?.information_id
-      : context.target_information_id;
+    const decision =
+      continuity?.input.decisionInformationId ??
+      (o
+        ? (
+            await this.db.query<{ information_id: string }>(
+              `SELECT a.information_id FROM information_atoms a JOIN information_references r USING(information_id) WHERE a.kind='agent.light.decision.completed' AND r.target_information_id=$1 AND r.relation='core:status-of'`,
+              [o.manifest.runInformationId],
+            )
+          ).rows[0]?.information_id
+        : context.target_information_id);
     if (!decision) throw new Error("delivery-decision-missing");
     const authorizationId = `action-delivery-authorization:${requestId}`;
     const prior = (
@@ -777,11 +793,28 @@ export class PostgresActionStore {
     });
   }
   private async nativeRunActive(tx: SqlTransaction, intentId: string) {
+    const operation = (
+      await tx.query<{ operation_id: string }>(
+        "SELECT operation_id FROM information_action_heads WHERE intent_id=$1",
+        [intentId],
+      )
+    ).rows[0]?.operation_id;
+    if (operation?.startsWith("delivery:")) {
+      const proof = await continuityDeliveryProof(
+        tx,
+        operation.slice("delivery:".length),
+      );
+      if (proof && !proof.valid) return false;
+    }
     const stopped = (
       await tx.query<{ stopped: boolean }>(
         `SELECT EXISTS(
       SELECT 1 FROM information_native_tool_calls c JOIN information_native_tool_runs r USING(run_id)
-      WHERE c.intent_id=$1 AND (r.stopped_id IS NOT NULL OR (r.spec->>'deadline')::timestamptz<=clock_timestamp())) stopped`,
+      LEFT JOIN information_continuity_activities ca ON ca.id=r.spec->'continuity'->>'activityId'
+      LEFT JOIN information_continuity_agents ag ON ag.agent_id=r.spec->'continuity'->>'agentId'
+      WHERE c.intent_id=$1 AND (r.stopped_id IS NOT NULL OR (r.spec->>'deadline')::timestamptz<=clock_timestamp()
+        OR (r.spec ? 'continuity' AND (ca.id IS NULL OR ag.agent_id IS NULL OR ag.policy->>'enabled'<>'true' OR ca.state<>'active'
+          OR ca.value->>'requestedState' IS NOT NULL OR ca.value->>'reevaluationRequired'='true')))) stopped`,
         [intentId],
       )
     ).rows[0]!;

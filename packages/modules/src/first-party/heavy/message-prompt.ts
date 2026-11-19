@@ -194,7 +194,20 @@ export function createMessagePromptCompiler(
           memories.informationIds.includes(atom.informationId),
         ),
       ),
-      variable("persona", identity.persona),
+      variable(
+        "persona",
+        atoms.some(
+          (a) =>
+            a.kind === "agent.situation.frozen" &&
+            (a.payload.frame as any)?.memory?.fixed?.some(
+              (n: any) =>
+                n.metadata.ownerId === "self:kaguya" &&
+                (n.metadata.tags.includes("persona-seed") || n.metadata.locked),
+            ),
+        )
+          ? "自我以本次冻结的 self:kaguya Memory 为准。角色种子属于设定，实际选择和经历另有来源。"
+          : identity.persona,
+      ),
       variable("behavior_policy", templates.behavior),
       variable(
         "platform_style",
@@ -247,6 +260,7 @@ export function createMessagePromptCompiler(
     const continuity = situation
       ? JSON.stringify(situation.payload.continuity ?? [])
       : "";
+    const continuous = rawSnapshot.continuousAgent;
     return {
       ...prompt,
       templates: allTemplates,
@@ -255,6 +269,15 @@ export function createMessagePromptCompiler(
             text: `${prompt.text}\n\n已记录的行动状态与实际结果：\n${continuity}`,
             variables: [
               ...prompt.variables,
+              ...(continuous
+                ? [
+                    variable(
+                      "continuity_snapshot",
+                      JSON.stringify(continuous.view),
+                      [raw.informationId],
+                    ),
+                  ]
+                : []),
               variable("action_records", continuity, [situation.informationId]),
             ],
           }

@@ -154,6 +154,7 @@ export function createMessageCatalog(
   configuredIdentity: Pick<AgentIdentity, "timeZone"> = DEFAULT_AGENT_IDENTITY,
   promptTemplates = loadFirstPartyPromptTemplates(),
   qqExpressionEnabled = false,
+  continuityEnabled = false,
 ) {
   const agentIdentity: AgentIdentity = {
     name: promptTemplates.identityName,
@@ -179,6 +180,8 @@ export function createMessageCatalog(
     lightPlatformPolicies: promptTemplates.lightPlatformPolicies,
 
     nativeMemoryTemplate: promptTemplates.nativeMemory,
+    continuityTemplate: promptTemplates.continuity,
+    continuityEnabled,
     qqExpressionTemplates: promptTemplates.qqExpression,
     qqExpressionEnabled,
     agentIdentity,
@@ -210,6 +213,9 @@ export function createMessageComposition(
       promptTemplates,
       options.moduleConfigs.some(
         (c) => c.definitionId === "plugin.qq-expression" && c.enabled,
+      ),
+      options.moduleConfigs.some(
+        (c) => c.definitionId === "agent.continuity" && c.enabled,
       ),
     );
   const moduleConfigs = options.moduleConfigs.filter(
@@ -274,6 +280,7 @@ export function createMessageComposition(
               "agent.situation",
               "memory.native",
               "plugin.qq-expression",
+              "agent.continuity",
             ].includes(activation.definitionId) ||
             options.pluginModelTasks?.[activation.definitionId] !== undefined,
         )
@@ -300,6 +307,16 @@ export function createMessageComposition(
             selectionPolicy: { tier: r.tier, routeId: r.routeId },
           })),
       ),
+      ...activations
+        .filter((a) => a.definitionId === "agent.continuity")
+        .map((activation) => ({
+          activation: {
+            instanceId: activation.instanceId,
+            definitionId: activation.definitionId,
+          },
+          taskId: "agent.continuity.execute",
+          selectionPolicy: { tier: "heavy" as const },
+        })),
     ],
     client: new KaguyaLlmClient({
       resolveModel: ({ modelId }) => {

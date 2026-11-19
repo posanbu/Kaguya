@@ -248,3 +248,5 @@ export * from "./scene.js";
 export * from "./media-content.js";
 
 export * from "./inspection-domain.js";
+
+export * from "./continuity.js";

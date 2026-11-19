@@ -313,6 +313,16 @@ export const nativeMemoryTemplateDeclaration: ModulePromptTemplateDefinition = {
   allowedPartials: [],
   composes: [],
 };
+export const continuityTemplateDeclaration: ModulePromptTemplateDefinition = {
+  mutability: "editable",
+  templateId: "agent.continuity",
+  name: "agent-continuity",
+  displayName: "持续状态与活动",
+  description: "根据冻结自我、主观状态、预算与活动证据评价和选择。",
+  allowedVariables: ["phase", "context"],
+  allowedPartials: [],
+  composes: [],
+};
 
 /** 所有第一方模板组的白名单；文件初始化和存储与模块声明共用此入口。 */
 export const firstPartyPromptTemplateGroups = [
@@ -329,4 +339,5 @@ export const firstPartyPromptTemplateGroups = [
   ],
   qqExpressionModulePromptTemplates,
   [nativeMemoryTemplateDeclaration],
+  [continuityTemplateDeclaration],
 ] as const;

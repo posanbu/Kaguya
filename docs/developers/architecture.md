@@ -180,3 +180,11 @@ Heartbeat 以 `openScope` 和成功观察水位聚合同 scope 通知，不为�
 重启或竞争遗留开放 candidate 时，情境运行模块继续使用候选冻结的上下水位，并在身份屏障就绪后保存同一有界证据集合。冻结记录保留 claim 的 `core:uses-context` 来源。Arousal defer 时保留已冻结记录，只有 observe 才进入 Light。身份结果迟到时仍复用原边界。Light 决策提交和最终发送继续由既有操作槽、终态槽与执行租约保护；迟到结果在派发前重新检查当前终态。
 
 在线 Selector 从 `information_lifecycle` 的开放集合读取 candidate，并按 scope 的注册位置索引读取最近 claim。该投影和 `information_scope_heads` 可变，业务原子和引用保持只追加。数据库启动时首次建立并回填投影，后续启动不重复扫描历史；写入原子、关闭投影和可靠执行意图同事务提交。历史规模与恢复测试分别验证开放索引查询和合并动作唯一性。
+
+## 持续自我、状态与活动
+
+`agent.continuity` 使用单一 `self:kaguya` Memory。角色种子、内部选择、实际经历和能力证据各有来源类型。活动执行与约定履约由独立存储端口拥有，Memory 只保留认识和经历引用。数据库在同一事务追加 Information 并更新活动、状态、预算及资源投影。
+
+宿主提供能力配置、时间、权限、执行事实和预算。模型只提出主观评价及候选选择。评价保存后，活动选择冻结新输入。Router 冻结同一组事实供 Light 和 Heavy 使用。主活动位置与需要主行动工具的聊天共用，旧意图和回执跨重启复用。未知写入先核对原操作，失效环境回执不能作为已核对资源或能力证据。
+
+本模块默认关闭，自主运行另行启用。完整职责、启停、迁移及回退说明见[自我、状态、活动与关系](./continuous/self-activity)。模型质量与真实平台验收边界见[验收记录](https://github.com/posanbu/Kaguya/blob/codex/continuous-agent/promptfoo/RESULTS-CONTINUITY-20261113.md)。

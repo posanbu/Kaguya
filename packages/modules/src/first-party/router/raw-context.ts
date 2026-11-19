@@ -9,6 +9,13 @@ export const frozenRawContextInformationKind = defineInformationKind({
   payloadSchema: z
     .object({
       turnInformationId: z.string().min(1),
+      continuousAgent: z
+        .object({
+          informationId: z.string().min(1),
+          view: z.record(z.string(), z.json()),
+        })
+        .strict()
+        .exactOptional(),
       through: z.number().int().nonnegative().default(0),
       evidence: z.array(situationEvidenceRecordSchema).default([]),
       global: z

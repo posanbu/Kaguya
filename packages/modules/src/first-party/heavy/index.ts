@@ -10,6 +10,9 @@
  * 失败、预算受阻或投递未知交给 Router 记录，不能当作自然结束。
  */
 import type { NativeMemoryAccess } from "@kaguya/memory";
+import { continuityChatDecisionSchema } from "@kaguya/schema";
+import { continuityCapability } from "@kaguya/sdk";
+import { recordChatChoice } from "../continuity/chat.js";
 import {
   nativeMemorySnapshotSchema,
   outboundContentSegmentsSchema,
@@ -90,6 +93,7 @@ import {
   messagePromptRenderer,
   currentAcceptedMessageSelector,
   turnMessageContextSelector,
+  selectPersistedModelContext,
 } from "./message-context.js";
 import {
   createMessagePromptCompiler,
@@ -174,6 +178,19 @@ export const messageResponseOutputSchema = z.union([
   recallActionSchema,
 ]);
 function responseSchema(prompt: CompiledPrompt, enabled: boolean) {
+  if (prompt.variables.some((v) => v.name === "continuity_snapshot")) {
+    const shape = { continuity: continuityChatDecisionSchema };
+    const responses = messageResponseWithoutRecallSchema.options;
+    const withContinuity = z.union([
+      responses[0].safeExtend(shape),
+      responses[1].safeExtend(shape),
+      responses[2].safeExtend(shape),
+      responses[3].safeExtend(shape),
+    ]);
+    return enabled && recallHistory(prompt).length < 2
+      ? z.union([withContinuity, recallActionSchema])
+      : withContinuity;
+  }
   return enabled && recallHistory(prompt).length < 2
     ? messageResponseOutputSchema
     : messageResponseWithoutRecallSchema;
@@ -253,6 +270,7 @@ export interface CreateHeavyModuleOptions<
   P extends ModelTaskCompletedInformationPayload =
     ModelTaskCompletedInformationPayload,
 > {
+  readonly continuityEnabled?: boolean;
   readonly nativeMemoryCapability?: ModuleCapability<NativeMemoryAccess>;
   readonly modelTaskCapability: ModuleCapability<ModelTaskCapability>;
   readonly messageAuthorizationCapability?: ModuleCapability<MessageAuthorization>;
@@ -351,6 +369,7 @@ export function createHeavyModule<
         assistantHistoryPromptRenderer,
       ],
       requires: [
+        ...(dependencies.continuityEnabled ? [continuityCapability] : []),
         messageOutputProcessorReady,
         ...(dependencies.draftProcessingEnabled
           ? [messageDraftProcessorReady]
@@ -621,18 +640,24 @@ export function createHeavyModule<
               selected,
               step?.intentInformationId ?? source.informationId,
             );
+            const request = selected.find(
+              (a) => a.kind === "core.model.task.requested",
+            )!;
             const response =
               completed.payload.outputMode === "object"
-                ? messageResponseOutputSchema.parse(completed.payload.output)
+                ? (request.payload.prompt === undefined
+                    ? messageResponseOutputSchema
+                    : responseSchema(
+                        compiledPromptSchema.parse(request.payload.prompt),
+                        Boolean(dependencies.nativeMemoryCapability),
+                      )
+                  ).parse(completed.payload.output)
                 : {
                     action: "message" as const,
                     text: messageTaskOutputSchema.parse(
                       completed.payload.output,
                     ),
                   };
-            const request = selected.find(
-              (a) => a.kind === "core.model.task.requested",
-            )!;
             if (response.action === "recall") {
               const prompt = compiledPromptSchema.parse(request.payload.prompt);
               if (
@@ -728,6 +753,13 @@ export function createHeavyModule<
               );
               return;
             }
+            if (dependencies.continuityEnabled && "continuity" in response)
+              await recordChatChoice(
+                response.continuity,
+                completed,
+                selected,
+                context,
+              );
             const requested = selected.find(
               (a) => a.kind === "core.model.task.requested",
             );
@@ -1350,11 +1382,17 @@ const completedMessageSelector = defineInformationSelector({
           : [];
     if (extra.length)
       await ledger.find({ informationIds: extra, limit: extra.length });
+    const continuityContext = (
+      requested[0].payload.prompt as any
+    )?.variables?.some((v: any) => v.name === "continuity_snapshot")
+      ? await selectPersistedModelContext(ledger, requested[0])
+      : [];
     return [
       ...new Set([
         message.informationId,
         requested[0]!.informationId,
         ...extra,
+        ...continuityContext.map((a) => a.informationId),
       ]),
     ];
   },

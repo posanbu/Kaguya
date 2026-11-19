@@ -1,3 +1,4 @@
+import { PersonContinuity } from "./PersonContinuity.js";
 /**
  * 功能概述：渲染模块 Manifest 声明的受控检查 Surface；首版提供状态摘要、实体主从浏览、关系列表、时间线与关系图。
  * model-request-browser 分派给独立 RequestSurface，按持久化模型请求提供目录与详情。
@@ -603,6 +604,11 @@ function PersonDetail({
           </div>
         </dl>
       </section>
+      <PersonContinuity
+        personId={entity.entityId}
+        token={token}
+        onTrace={onTrace}
+      />
       <a
         href={`/memory?ownerId=${encodeURIComponent(`person:${entity.entityId}`)}`}
       >

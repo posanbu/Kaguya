@@ -21,9 +21,9 @@ const resources: readonly {
   },
   {
     kind: "persona",
-    label: "身份、经历、性格与关系",
+    label: "角色种子与表达性格",
     rows: 5,
-    help: "不放平台表达风格；平台风格由对应模块资源决定。",
+    help: "这里保存角色设定，虚构背景不是实际经历。启用持续自我后，明确修改在应用配置后导入同一 Memory 修订历史。实际经历和人物关系在 Memory 中维护。",
   },
 ];
 

@@ -138,14 +138,14 @@ describe("first-party module configuration", () => {
       }
     }
   });
-  it("materializes only native Memory as a switchable feature", () => {
+  it("keeps native Memory and autonomous activity explicitly opt-in", () => {
     const defaults = createFirstPartyModuleConfigDefaults("production");
-    expect(defaults).toHaveLength(8);
+    expect(defaults).toHaveLength(9);
     expect(
       defaults.some((config) => config.definitionId === "memory.expression"),
     ).toBe(false);
     expect(defaults.every(({ version }) => version === 1)).toBe(true);
-    for (const id of ["memory.native", "adapter.napcat"])
+    for (const id of ["memory.native", "agent.continuity", "adapter.napcat"])
       expect(
         defaults.find((config) => config.definitionId === id)?.enabled,
       ).toBe(false);
