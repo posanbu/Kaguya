@@ -59,6 +59,8 @@ flowchart TD
 - **检查 · 模块目录为空** — [桌面对照](/images/comparisons/317/inspection-1440.webp) · [手机对照](/images/comparisons/317/inspection-375.webp)
   配置页可对照编辑区正文与背景图的分隔，生效管理页可对照字段和值的对齐方式，消息页可对照空对话的图标与输入区域。
 
+在同一批已渲染页面上运行 Impeccable 的 DOM 检测，两种视口合计从改版前的 28 项提示降至 22 项。检查页“查找模块”的占位文字在改版前后分别为 3.7∶1 和 3.6∶1，均低于 4.5∶1。改版后的配置页另有两处需要结合实图判断：桌面和窄屏上的配置检查区出现嵌套卡片提示，窄屏上的标题字号层级也被标记。
+
 ## 当前页面状态
 
 Web UI 当前以有限状态机组织首屏：`checking`、`profiles`、`restart`、`chat` 和 `error`。页面加载时携带本实例 token 读取 Profile readiness，再决定进入 Profile 管理、重启提示或消息界面。
