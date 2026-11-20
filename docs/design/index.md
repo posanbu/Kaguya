@@ -46,6 +46,26 @@ flowchart TD
 
 **操作密度** — Profile、NapCat 和消息操作沿用现有页面状态与信息顺序。实体表面保持可读对比；窄屏改为单栏时，主要触控目标保持足够尺寸。装饰背景不承载信息，也不遮挡输入、焦点或错误提示。
 
+### 深色主题改版对照
+
+以下首屏分别来自 [#319](https://github.com/posanbu/Kaguya/pull/319) 合入前的 `4ebd7fe03`（左）和合入后的 `02efd8738`（右）。每组使用同一份模拟接口响应、同一浏览器和固定时间，以 1 倍像素密度、减少动态效果模式截取。桌面为 1440 × 900，手机为 375 × 812。两种宽度下的七个页面均未出现文档级横向溢出。
+
+- **概览 · 部分功能读取失败** — [桌面对照](/images/comparisons/317/overview-1440.webp) · [手机对照](/images/comparisons/317/overview-375.webp)
+- **情境 · 等待首个 tick** — [桌面对照](/images/comparisons/317/situation-1440.webp) · [手机对照](/images/comparisons/317/situation-375.webp)
+- **消息 · 空对话** — [桌面对照](/images/comparisons/317/messages-1440.webp) · [手机对照](/images/comparisons/317/messages-375.webp)
+- **记忆 · 数据库未就绪** — [桌面对照](/images/comparisons/317/memory-1440.webp) · [手机对照](/images/comparisons/317/memory-375.webp)
+- **配置 · 已打开示例 Profile** — [桌面对照](/images/comparisons/317/profiles-1440.webp) · [手机对照](/images/comparisons/317/profiles-375.webp)
+- **生效管理 · 选中配置已生效** — [桌面对照](/images/comparisons/317/application-1440.webp) · [手机对照](/images/comparisons/317/application-375.webp)
+- **检查 · 模块目录为空** — [桌面对照](/images/comparisons/317/inspection-1440.webp) · [手机对照](/images/comparisons/317/inspection-375.webp)
+  配置页可对照编辑区正文与背景图的分隔，生效管理页可对照字段和值的对齐方式，消息页可对照空对话的图标与输入区域。
+
+在同一批已渲染页面上运行 Impeccable 的 DOM 检测，两种视口合计从改版前的 28 项提示降至 22 项。检查页“查找模块”的占位文字在改版前后分别为 3.7∶1 和 3.6∶1，均低于 4.5∶1。改版后的配置页另有两处需要结合实图判断：桌面和窄屏上的配置检查区出现嵌套卡片提示，窄屏上的标题字号层级也被标记。
+
+后续在主线 `884a45470` 上复核并修正了这两页。搜索占位文字使用主题辅助文字色，对比度提升至 8.35∶1。配置页保留完整的深色底面，通过分隔线区分检查摘要与表单，窄屏标题从 22px 调为 24px。橙色主按钮的白字对比度从 4.1∶1 提升至 4.95∶1。以下图片左侧为该主线版本，右侧为修正后。
+
+- **配置** — [桌面对照](/images/comparisons/317/followup-profiles-1440.webp) · [手机对照](/images/comparisons/317/followup-profiles-375.webp)
+- **检查** — [桌面对照](/images/comparisons/317/followup-inspection-1440.webp) · [手机对照](/images/comparisons/317/followup-inspection-375.webp)
+
 ## 当前页面状态
 
 Web UI 当前以有限状态机组织首屏：`checking`、`profiles`、`restart`、`chat` 和 `error`。页面加载时携带本实例 token 读取 Profile readiness，再决定进入 Profile 管理、重启提示或消息界面。

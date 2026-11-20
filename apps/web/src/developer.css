@@ -59,6 +59,10 @@
 .developer-search {
   max-width: 800px;
 }
+.developer-search input::placeholder {
+  color: var(--kaguya-muted);
+  opacity: 1;
+}
 .developer-filters {
   display: flex;
   align-items: end;

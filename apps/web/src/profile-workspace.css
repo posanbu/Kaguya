@@ -116,10 +116,12 @@
   cursor: not-allowed;
   opacity: 0.42;
 }
+.profile-settings .wb-page-header h1 {
+  font-size: clamp(24px, 2vw, 26px);
+}
 .profile-problem-summary {
-  border: 1px solid var(--kaguya-line);
-  border-radius: 10px;
-  padding: 16px;
+  border-block-start: 1px solid var(--kaguya-line);
+  padding-block-start: 16px;
   margin: 16px 0;
 }
 .profile-problem-summary ul {
