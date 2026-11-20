@@ -25,6 +25,10 @@
  * model-request-browser 通过 inspection-requests.ts 读取模块归属的模型请求，独立详情与完整 Prompt 使用同一认证和脱敏边界。
  * 节点最多 500，边最多 2000，详情引用最多 100，明确报告截断和图外引用；无编辑、重放或订阅。
  */
+import {
+  lifecycleInspectionSchema,
+  lifecycleSnapshotSchema,
+} from "@kaguya/schema";
 import { createDomainInspection } from "./inspection-domain.js";
 import { InspectionDomainError } from "./inspection-domain-common.js";
 import type { InspectionEnvironmentSource } from "./inspection-environments.js";
@@ -40,7 +44,7 @@ import {
   type RequestBrowser,
 } from "./inspection-requests.js";
 import { createHash } from "node:crypto";
-import { readSituation } from "./inspection-situation.js";
+import { latestLifecycle, readSituation } from "./inspection-situation.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { InformationRepository, KaguyaDatabase } from "@kaguya/database";
 import {
@@ -109,18 +113,24 @@ function readField(payload: unknown, path: string): JsonValue | undefined {
   }
   return value as JsonValue | undefined;
 }
+type InspectionView = NonNullable<
+  InspectionModule["inspection"]
+>["views"][number];
 const summary = (
   a: DeepReadonly<InformationAtom>,
   modules: readonly InspectionModule[],
   redact: (value: unknown) => JsonValue,
+  selectedView?: InspectionView,
 ) => {
   const safePayload = redact(a.payload);
   const kind = modules
     .flatMap((m) => [...m.produces, ...m.consumes])
     .find((k) => k.kind === a.kind);
-  const view = modules
-    .flatMap((m) => m.inspection?.views ?? [])
-    .find((v) => v.kinds.includes(a.kind));
+  const view =
+    selectedView ??
+    modules
+      .flatMap((m) => m.inspection?.views ?? [])
+      .find((v) => v.kinds.includes(a.kind));
   const fields = (
     view?.fields ?? [
       { path: "text", label: "内容" },
@@ -191,7 +201,7 @@ export interface InspectionSource {
     Partial<
       Pick<
         InformationRepository,
-        "getMany" | "inspectPayloadCounts" | "inspectEntityPage"
+        "find" | "getMany" | "inspectPayloadCounts" | "inspectEntityPage"
       >
     >;
   readonly modules: () => unknown;
@@ -522,6 +532,27 @@ export function createInspectionService(source: InspectionSource) {
       .modules;
   return {
     domains,
+    async lifecycle() {
+      const ledger = source.ledger;
+      if (!ledger.find) throw new InspectionError(503, "lifecycle_unavailable");
+      const readAt = (source.now?.() ?? new Date()).toISOString();
+      const root = await latestLifecycle(ledger);
+      return lifecycleInspectionSchema.parse(
+        redact({
+          version: 1,
+          readAt,
+          latest: root
+            ? {
+                informationId: root.informationId,
+                source: root.source,
+                occurredAt: root.occurredAt,
+                snapshot:
+                  lifecycleSnapshotSchema.safeParse(root.payload).data ?? null,
+              }
+            : null,
+        }),
+      );
+    },
     async situation() {
       return redact(await readSituation(source.ledger));
     },
@@ -537,7 +568,7 @@ export function createInspectionService(source: InspectionSource) {
         ...filters
       } = parseRequest(pageQuery, input);
       const catalog = modules();
-      let kinds: readonly string[] | undefined;
+      let selectedView: InspectionView | undefined;
       if (filters.definitionId || filters.view) {
         if (contextsOnly || !filters.definitionId || !filters.view)
           throw new InspectionError(400, "invalid_module_view");
@@ -558,7 +589,7 @@ export function createInspectionService(source: InspectionSource) {
           )
         )
           throw new InspectionError(400, "invalid_module_source");
-        kinds = view.kinds;
+        selectedView = view;
       }
       if (contextsOnly) filters.kind = "core.runtime.context";
       const filter = createHash("sha256")
@@ -577,7 +608,16 @@ export function createInspectionService(source: InspectionSource) {
           throw new InspectionError(400, "invalid_cursor");
       }
       const rows = await source.ledger.inspectPage({
-        ...(kinds ? { kinds } : {}),
+        ...(selectedView ? { kinds: selectedView.kinds } : {}),
+        ...(filters.definitionId === "agent.lifecycle" &&
+        filters.view === "schedule-roots"
+          ? {
+              payloadIn: {
+                path: ["activation", "definitionId"],
+                values: ["agent.lifecycle"],
+              },
+            }
+          : {}),
         ...(filters.kind ? { kind: filters.kind } : {}),
         ...(filters.source ? { source: filters.source } : {}),
         ...(filters.after ? { after: filters.after } : {}),
@@ -600,7 +640,9 @@ export function createInspectionService(source: InspectionSource) {
       // 游标只携带分页定位字段；内容与元数据均经相同脱敏器。
       return inspectionPageSchema.parse({
         version: 1,
-        items: redact(items.map((a) => summary(a, catalog, redact))),
+        items: redact(
+          items.map((a) => summary(a, catalog, redact, selectedView)),
+        ),
         nextCursor,
         truncated: rows.length > limit,
       });
@@ -1126,6 +1168,7 @@ export function registerInspectionRoutes(
       },
     ],
     ["modules", (_, s) => s.modules()],
+    ["lifecycle", (_, s) => s.lifecycle()],
     ["situation", (_, s) => s.situation()],
     [
       "modules/:definitionId/surfaces/:surfaceId",

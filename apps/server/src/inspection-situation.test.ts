@@ -48,6 +48,11 @@ function frame(id = "turn"): SituationView["frames"][number] {
 }
 function ledger(rows: ReturnType<typeof atom>[]): InspectionSource["ledger"] {
   return {
+    find: async ({ kinds, limit }) =>
+      rows
+        .filter((row) => !kinds || kinds.includes(row.kind))
+        .reverse()
+        .slice(0, limit),
     get: async (id) => rows.find((row) => row.informationId === id),
     inspectPage: async (query) =>
       rows
