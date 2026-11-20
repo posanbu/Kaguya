@@ -60,15 +60,16 @@ function LifecycleSurface(props: ModuleSurfaceProps) {
   const active =
     new URLSearchParams(location.split("?")[1]).get("lifecycle") ?? "activity";
   const options = [
-    { id: "activity", title: "当前活动", view: "activity" },
-    { id: "sleep", title: "睡眠与唤醒", view: "gates" },
-    { id: "observation", title: "观察", view: "gates" },
-    { id: "schedules", title: "调度", view: "schedules" },
+    { id: "activity", title: "当前活动", views: ["activity", "frozen"] },
+    { id: "sleep", title: "睡眠与唤醒", views: ["sleep", "wakes"] },
+    { id: "observation", title: "观察", views: ["gates"] },
+    { id: "schedules", title: "调度", views: ["schedule-roots"] },
   ];
   const chosen = options.find((option) => option.id === active) ?? options[0]!;
-  const views =
-    props.module.inspection?.views.filter((view) => view.id === chosen.view) ??
-    [];
+  const views = chosen.views.flatMap(
+    (id) =>
+      props.module.inspection?.views.filter((view) => view.id === id) ?? [],
+  );
   const module = {
     ...props.module,
     inspection: { ...props.module.inspection!, views },
@@ -93,16 +94,7 @@ function LifecycleSurface(props: ModuleSurfaceProps) {
       {chosen.id === "observation" ? (
         <DeclaredSurface {...props} />
       ) : (
-        <ModuleRuntimeSection
-          key={chosen.id}
-          {...props}
-          module={module}
-          fixedKind={
-            chosen.id === "sleep"
-              ? "agent.attention.arousal.state.recorded"
-              : undefined
-          }
-        />
+        <ModuleRuntimeSection key={chosen.id} {...props} module={module} />
       )}
     </section>
   );

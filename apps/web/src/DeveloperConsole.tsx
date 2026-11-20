@@ -376,6 +376,22 @@ function Detail({
     payload && typeof payload === "object" && !Array.isArray(payload)
       ? payload.prompt
       : undefined;
+  const frozenGlobal =
+    detail?.atom.kind === "agent.router.memory.context.frozen" &&
+    payload &&
+    typeof payload === "object" &&
+    !Array.isArray(payload)
+      ? payload.global
+      : undefined;
+  const frozenSources =
+    frozenGlobal &&
+    typeof frozenGlobal === "object" &&
+    !Array.isArray(frozenGlobal) &&
+    Array.isArray(frozenGlobal.informationIds)
+      ? frozenGlobal.informationIds.filter(
+          (id): id is string => typeof id === "string",
+        )
+      : [];
   const promptText =
     prompt &&
     typeof prompt === "object" &&
@@ -429,6 +445,24 @@ function Detail({
             <summary>原始 JSON（已脱敏）</summary>
             <pre>{JSON.stringify(detail.atom.payload, null, 2)}</pre>
           </details>
+          {detail.atom.kind === "agent.router.memory.context.frozen" && (
+            <section aria-label="冻结的全局来源">
+              <h3>冻结的全局来源</h3>
+              {frozenSources.length === 0 && <p>该快照未记录全局来源。</p>}
+              {frozenSources.slice(0, 100).map((id, index) => (
+                <Button
+                  className="reference-link"
+                  key={index}
+                  onClick={() => select(id)}
+                >
+                  {id}
+                </Button>
+              ))}
+              {frozenSources.length > 100 && (
+                <p>已显示前 100 项，其余来源见全部字段。</p>
+              )}
+            </section>
+          )}
           <h3>引用的消息</h3>
           {!detail.atom.references.length && <p>无</p>}
           {detail.atom.references.map((r, i) => (

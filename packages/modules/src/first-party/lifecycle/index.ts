@@ -187,7 +187,7 @@ export function createLifecycleModule(options: { timeZone: string }) {
         views: [
           {
             id: "activity",
-            title: "当前活动与时间线",
+            title: "活动历史",
             description: "规则状态与合并活动段，独立于模型请求更新。",
             kinds: [lifecycleStateInformationKind.kind],
             fields: [
@@ -218,6 +218,41 @@ export function createLifecycleModule(options: { timeZone: string }) {
               { path: "scheduleInformationId", label: "预约来源" },
               { path: "deliveredAt", label: "实际交付时间" },
               { path: "failureKind", label: "失败类别" },
+            ],
+          },
+          {
+            id: "frozen",
+            title: "模型冻结快照",
+            description:
+              "以 Router 已冻结的原始上下文为根。全局来源保留该轮实际纳入的记录；旧快照缺少的活动来源保持未知。",
+            kinds: ["agent.router.memory.context.frozen"],
+            fields: [
+              { path: "turnInformationId", label: "冻结轮次" },
+              { path: "through", label: "背景水位" },
+            ],
+          },
+          {
+            id: "sleep",
+            title: "睡眠状态与复查",
+            description:
+              "以持久化的睡眠状态变更为根；详情保留当时的唤醒原因和触发来源。",
+            kinds: ["agent.attention.arousal.state.recorded"],
+            fields: [
+              { path: "state", label: "睡眠状态" },
+              { path: "cause", label: "变更原因" },
+              { path: "scopeKey", label: "会话范围" },
+            ],
+          },
+          {
+            id: "schedule-roots",
+            title: "Lifecycle 调度预约",
+            description:
+              "仅列出归属本模块的历史预约。从预约详情的反向引用查看触发、替代和失败；缺少终态时执行结果未知。",
+            kinds: ["core.schedule.one-shot.requested"],
+            fields: [
+              { path: "operationKey", label: "调度操作" },
+              { path: "activation.instanceId", label: "归属实例" },
+              { path: "dueAt", label: "预约时间" },
             ],
           },
         ],

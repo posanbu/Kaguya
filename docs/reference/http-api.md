@@ -23,6 +23,8 @@ description: Kaguya 统一 Server 的路由、认证、Profile 与消息协议�
 
 **持续 Agent 领域检视** — 观察、独立消费者进度、native run、行动回执、精确 Memory 历史和 GUI 控制状态提供只读 DTO。查询要求规范 `scope`；签名游标、500 条目录窗口、来源证明与证据语义见[领域检视接口](../developers/inspection.md)。
 
+**生命周期投影** — `GET /api/v1/inspection/lifecycle` 按账本登记顺序读取最近一条 `agent.lifecycle.state.recorded`。响应包含读取时间 `readAt`，以及 `latest` 中的根记录 ID、来源、发生时间和规则快照。尚无记录时 `latest` 为 `null`；根记录内容无法解析时保留其来源，`snapshot` 为 `null`。历史筛选和 Router 冻结的模型上下文分别通过模块视图读取。
+
 **情境工作台** — `GET /api/v1/inspection/situation` 返回 `version: 1`、冻结快照 `frames`、模型行动 `steps` 和 `truncated`。从最近 50 条冻结记录中读取有效快照，并查询最近 60 次 Light/Heavy 请求，并补入最新快照可关联的未完成行动。记录按账本登记顺序读取。响应区分模型终态与投递结果，只返回已保存的可读推理，不返回原生接续消息。运行时没有冻结记录时返回空数组，不写入或重建历史。
 
 **模块声明** — `GET /api/v1/inspection/modules` 返回 Manifest 名称、绑定与可选 `inspection`。其中 `mechanism` 描述机制，`views` 声明稳定视图 ID、Kind 集合及中文字段，`storage` 指定 Memory 或向量库。

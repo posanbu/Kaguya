@@ -21,3 +21,16 @@ export const lifecycleSnapshotSchema = z
   .strict();
 export type ActivitySpan = z.infer<typeof activitySpanSchema>;
 export type LifecycleSnapshot = z.infer<typeof lifecycleSnapshotSchema>;
+
+export const lifecycleInspectionSchema = z.object({
+  version: z.literal(1),
+  readAt: z.string(),
+  latest: z
+    .object({
+      informationId: z.string(),
+      source: z.string(),
+      occurredAt: z.string(),
+      snapshot: lifecycleSnapshotSchema.nullable(),
+    })
+    .nullable(),
+});

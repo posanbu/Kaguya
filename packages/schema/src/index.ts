@@ -239,6 +239,7 @@ export * from "./situation-view.js";
 export * from "./native-continuation.js";
 export {
   activitySpanSchema,
+  lifecycleInspectionSchema,
   lifecycleSnapshotSchema,
   type ActivitySpan,
   type LifecycleSnapshot,

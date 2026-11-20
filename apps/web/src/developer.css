@@ -117,6 +117,10 @@
   gap: 24px;
   align-items: start;
 }
+.module-runtime-detail {
+  align-self: stretch;
+  min-width: 0;
+}
 .atom-detail {
   position: sticky;
   top: 16px;

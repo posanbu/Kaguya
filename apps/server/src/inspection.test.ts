@@ -324,6 +324,7 @@ describe("developer inspection", () => {
   it("authenticates every endpoint before validating and disables response caching", async () => {
     for (const path of [
       "situation",
+      "lifecycle",
       "modules",
       "atoms?limit=bad",
       "atoms/missing",
@@ -607,6 +608,100 @@ describe("developer inspection", () => {
       ),
     ).toBe(true);
   });
+  it("resolves the latest registered activity independently of history and follows only Lifecycle schedule roots", async () => {
+    async function record(
+      id: string,
+      kind: string,
+      at: string,
+      payload: InformationAtom["payload"],
+      parent?: string,
+    ) {
+      const relation = "core:status-of";
+      await database.information.append(
+        freezeInformationAtom({
+          informationId: id,
+          kind,
+          occurredAt: at,
+          source: "module:lifecycle.default",
+          payload,
+          references: parent ? [{ relation, informationId: parent }] : [],
+        }),
+        parent ? [{ relation, required: true, multiple: false }] : [],
+      );
+    }
+    const late = "2026-09-12T00:00:00.000Z";
+    for (const [id, at] of [
+      ["late-by-time", late],
+      ["latest-by-registration", time],
+    ] as const) {
+      await record(id, "agent.lifecycle.state.recorded", at, {
+        state: "awake",
+        at,
+        lastActivityAt: at,
+        scopeActivityAt: {},
+        timeline: [],
+      });
+    }
+    const projection = await get("lifecycle");
+    expect(projection.json().data).toMatchObject({
+      readAt: time,
+      latest: {
+        informationId: "latest-by-registration",
+        snapshot: { at: time },
+      },
+    });
+    expect((await get("situation")).json().data.lifecycle.at).toBe(time);
+    await record(
+      "unreadable-latest",
+      "agent.lifecycle.state.recorded",
+      late,
+      {},
+    );
+    expect((await get("lifecycle")).json().data.latest).toMatchObject({
+      informationId: "unreadable-latest",
+      snapshot: null,
+    });
+    const request = "core.schedule.one-shot.requested";
+    await record("lifecycle-request", request, time, {
+      activation: { definitionId: "agent.lifecycle" },
+    });
+    await record("other-request", request, time, {
+      activation: { definitionId: "other.module" },
+    });
+    await record("future-request", request, late, {
+      activation: { definitionId: "agent.lifecycle" },
+    });
+    await record(
+      "lifecycle-failure",
+      "core.schedule.one-shot.failed",
+      late,
+      { failureKind: "consumer-failed" },
+      "lifecycle-request",
+    );
+    const roots = await get(
+      "atoms?definitionId=agent.lifecycle&view=schedule-roots&before=2026-09-11T23:00:00Z",
+    );
+    expect(roots.statusCode).toBe(200);
+    expect(
+      roots
+        .json()
+        .data.items.map((row: { informationId: string }) => row.informationId),
+    ).toEqual(["lifecycle-request"]);
+    expect(
+      (await get("atoms/lifecycle-request")).json().data.referencedBy,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ informationId: "lifecycle-failure" }),
+      ]),
+    );
+    expect(
+      (await get("atoms/lifecycle-failure")).json().data.atom.references,
+    ).toContainEqual({
+      relation: "core:status-of",
+      informationId: "lifecycle-request",
+    });
+  });
+
   it("returns safe unavailable and database error responses", async () => {
     const unavailable = await createHttpApplication({ config });
     try {
