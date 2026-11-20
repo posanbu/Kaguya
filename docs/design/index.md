@@ -61,6 +61,11 @@ flowchart TD
 
 在同一批已渲染页面上运行 Impeccable 的 DOM 检测，两种视口合计从改版前的 28 项提示降至 22 项。检查页“查找模块”的占位文字在改版前后分别为 3.7∶1 和 3.6∶1，均低于 4.5∶1。改版后的配置页另有两处需要结合实图判断：桌面和窄屏上的配置检查区出现嵌套卡片提示，窄屏上的标题字号层级也被标记。
 
+后续在主线 `884a45470` 上复核并修正了这两页。搜索占位文字使用主题辅助文字色，对比度提升至 8.35∶1。配置页保留完整的深色底面，通过分隔线区分检查摘要与表单，窄屏标题从 22px 调为 24px。橙色主按钮的白字对比度从 4.1∶1 提升至 4.95∶1。以下图片左侧为该主线版本，右侧为修正后。
+
+- **配置** — [桌面对照](/images/comparisons/317/followup-profiles-1440.webp) · [手机对照](/images/comparisons/317/followup-profiles-375.webp)
+- **检查** — [桌面对照](/images/comparisons/317/followup-inspection-1440.webp) · [手机对照](/images/comparisons/317/followup-inspection-375.webp)
+
 ## 当前页面状态
 
 Web UI 当前以有限状态机组织首屏：`checking`、`profiles`、`restart`、`chat` 和 `error`。页面加载时携带本实例 token 读取 Profile readiness，再决定进入 Profile 管理、重启提示或消息界面。

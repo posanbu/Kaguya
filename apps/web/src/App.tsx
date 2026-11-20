@@ -695,7 +695,7 @@ function ProfileManagementScreen({
       }}
     >
       {draftProtection.dialog}
-      <div className="setup-shell">
+      <div className="setup-shell profile-settings">
         <PageHeader
           title="配置"
           titleAside={
